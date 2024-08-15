@@ -14,7 +14,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-//added in the US
+//Modified during VICTOR WS
 //#define TEPHRA2
 //#define CUDA
 

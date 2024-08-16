@@ -1,0 +1,1 @@
+cp -r _files_essencial _new_ash_field

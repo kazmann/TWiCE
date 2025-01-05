@@ -18,7 +18,7 @@
 #include <unistd.h>
 
 //#define TEPHRA2
-#define CUDA
+//#define CUDA
 //#define TEST	//OUTPUT lspml.txt which is massloading contribution for each Location, particle Source, Phi in decimal
 
 double  GRAVITY = 9.81;

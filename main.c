@@ -1455,7 +1455,7 @@ void extractisopachdata(DEP *l){
 				l2[j2].ttlmassloading = l[j].ttlmassloading;
 				l2[j2].smallerthan1mm = l[j].smallerthan1mm;
 				l2[j2].meandiameter = l[j].meandiameter;
-				l2[j2].dep[0] = l2[j2].j * l2[j2].j * MESH_SIZE_IN_KM * MESH_SIZE_IN_KM; // area of isopach
+				l2[j2].dep[0] = l2[j2].j * MESH_SIZE_IN_KM * MESH_SIZE_IN_KM; // area of isopach 20250111
 				l2[j2].dep[1] = sqrt(l2[j2].dep[0]); // square root area
 				fvalue = l2[j2].smallerthan1mm / l2[j2].ttlmassloading * 100;
 				

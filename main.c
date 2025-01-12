@@ -1446,7 +1446,7 @@ void extractisopachdata(DEP *l){
 	for(j=0; j<LOCDIM; j++){
 		if(l[j].x > MAPENDW && l[j].x < MAPENDE && l[j].y > MAPENDS && l[j].y < MAPENDN){
 			if(l[j].dist > distance){
-				l2[j2].j = j2 + 1;
+				l2[j2].j = j + 1; //20250112
 				l2[j2].x = l[j].x;
 				l2[j2].y = l[j].y;
 				l2[j2].z = l[j].z;

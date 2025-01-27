@@ -1470,7 +1470,7 @@ void extractisopachdata(DEP *l){
 				distance = l[j].dist;
 				j2++;
 			} 
-		}
+		}else{break;//20250127}
 	}
 	fclose(outfile);
 	

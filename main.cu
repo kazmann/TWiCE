@@ -1,4 +1,3 @@
-//
 // TWiCE; Tephra fall simulator for Windy Condition Eruption
 // Developed by K. Mannen in 2022
 // Modified in 20230714 TO ASSIGN kw and ks from configfile
@@ -101,7 +100,7 @@ double dist;
 double ttlmassloading;
 double smallerthan1mm;
 double meandiameter;
-double dep[20];
+double dep[20]; // mass of each phi size class but for l2 dep[0] and dep[1] indicate area of isopach and its square root
 } DEP;	//locdatastruct or l[j]
 
 typedef struct {	// Total particle segregation during the eruption
@@ -411,7 +410,7 @@ int main(int argc, char *argv[]) {
 		}// END OF DECIMAL PHI LOOP
 		//released_mass_of_fraction = confirm_released_mass(massreleased_per_ds_and_phidec);
 		drift_from_a_certain_source(sourceX, sourceY, sourceZ, sourceRadius, ttlfalltimephidec, ttldriftXphidec, ttldriftYphidec, driftX_s, driftY_s, sigma_square);
-		writetrajectory(phiint, driftX_s, driftY_s, sigma_square, massreleased_per_ds_and_phidec, massreleased_per_ds);
+		writetrajectory(phiint, driftX_s, driftY_s, sigma_square, massreleased_per_ds_and_phidec, massreleased_per_ds);  // mass released for 1phi interval is also calculated from 0.1 phi interval data
 		get_sdimcutoff(sigma_square, massreleased_per_ds, phiint);	// obtain SDIMCUTOFF
 		
 		if(WRITE_DECIMAL_FALL_TRAJ){// 20240728 output 0.1 phi interval fallout to each 1 phi interval file
@@ -1416,13 +1415,19 @@ void extractisopachdata(DEP *l){
 	int i = 0;
 	int imax;
 	int j = 0;
+	int sqrtA, sqrtAinit;
+	
+	double maxsqrtA;
+	
 	double distance = -9999;
 	double dir, fvalue;
 	double poweroftwo, ratio;
 	double log2S;
 	double demon1, demon2;
+	double minS = 0.01;
+	double maxS;
 
-	double intA, intSqrtA, intx, inty, intdist, intdistax, intmean, intF;
+	double intS, intA, intSqrtA, intx, inty, intdist, intdistax, intmean, intF;
 	double intxprevious, intyprevious, intdistaxprevious;
 
 	FILE *outfile;
@@ -1435,13 +1440,15 @@ void extractisopachdata(DEP *l){
 					} 
 		}
 	}
-
-	DEP *l2;
+	
+	maxS = l[0].ttlmassloading;
+	
+	DEP *l2;			// l2 stores array of distribution axis, which is defined as most distal point above the certain thickness.
 	l2 = (DEP *)calloc(jmax, sizeof(DEP));
 	int j2 = 0;
 	distance = -9999;
 	outfile = fopen("S_vs_Area.txt", "w");
-	fprintf(outfile, "massloading(kg/m2)\tarea(sqkm)\tsqrtA(km)\tdist_from_vent(m)\tdist_along_axis(m)\tx(m)\ty(m)\tdir(deg)\tMean(phi)\tF(percent)\n");
+	fprintf(outfile, "massloading(kg/m2)\tarea(sqkm)\tsqrtA(km)\tdist_from_vent(m)\tx(m)\ty(m)\tdir(deg)\tMean(phi)\tF(percent)\n");
 
 	for(j=0; j<LOCDIM; j++){
 		if(l[j].x > MAPENDW && l[j].x < MAPENDE && l[j].y > MAPENDS && l[j].y < MAPENDN){
@@ -1466,26 +1473,27 @@ void extractisopachdata(DEP *l){
 				demon1 = l2[j2-1].x - l2[j2].x; demon2 = l2[j2-1].y - l2[j2].y;
 				l2[j2].dep[3] = sqrt(demon1 * demon1 + demon2 * demon2) + l2[j2-1].dep[3];
 				}
-				fprintf(outfile, "%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.2f\t%1.2f\t%1.1f\t%1.4f\t%1.4f\n", l2[j2].ttlmassloading, l2[j2].dep[0], l2[j2].dep[1], l2[j2].dist, l2[j2].dep[3], l2[j2].x, l2[j2].y, dir, l2[j2].meandiameter, fvalue);
+				fprintf(outfile, "%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.2f\t%1.2f\t%1.1f\t%1.4f\t%1.4f\n", l2[j2].ttlmassloading, l2[j2].dep[0], l2[j2].dep[1], l2[j2].dist, l2[j2].x, l2[j2].y, dir, l2[j2].meandiameter, fvalue);
 				distance = l[j].dist;
+				maxsqrtA = l2[j2].dep[1];
 				j2++;
 			} 
-		}else{break;//20250127}
+		}else{break;}
 	}
 	fclose(outfile);
 	
 	
   outfile = fopen("S_vs_Area_summary.txt", "w");
-  log2S = floor(log2(l[0].ttlmassloading));
-  //imax = int(log2S - ceil(log2(l2[j2-1].ttlmassloading))) + 1;    //20250105
-  imax = (int)(log2S) - (int)ceil(log2(l2[j2-1].ttlmassloading)) + 1; //20250105
+  log2S = floor(log2(l[0].ttlmassloading)); //20250128
+  if(l2[j2-1].ttlmassloading > minS){minS = l2[j2-1].ttlmassloading;} //20250128
+  imax = (int)(log2S) - (int)ceil(log2(minS)) + 1; //20250105
 
-  fprintf(outfile, "massloading(kg/m2)\tarea(sqkm)\tsqrtA(km)\tdist_from_vent(m)\tdist_along_axis(m)\tx(m)\ty(m)\tdir(deg)\tMean(phi)\tF(percent)\n");
+  fprintf(outfile, "massloading(kg/m2)\tarea(sqkm)\tsqrtA(km)\tdist_from_vent(m)\tx(m)\ty(m)\tdir(deg)\tMean(phi)\tF(percent)\n");
   for(i=0; i < imax; i++){
   	for(j=0; j<jmax; j++){
         //poweroftwo = pow(2, log2S - float(i)); //20250105
   		poweroftwo = pow(2, log2S - (double)i); //20250105
-  		if(l2[j].ttlmassloading > poweroftwo && l2[j+1].ttlmassloading < poweroftwo){
+  		if(l2[j].ttlmassloading >= poweroftwo && l2[j+1].ttlmassloading < poweroftwo){
   			ratio = (poweroftwo - l2[j+1].ttlmassloading) / (l2[j].ttlmassloading - l2[j+1].ttlmassloading);
   			intA = (l2[j].dep[0] - l2[j + 1].dep[0]) * ratio + l2[j + 1].dep[0];
   			intSqrtA = (l2[j].dep[1] - l2[j + 1].dep[1]) * ratio + l2[j + 1].dep[1];
@@ -1508,12 +1516,74 @@ void extractisopachdata(DEP *l){
   			intF =  (l2[j].smallerthan1mm / l2[j].ttlmassloading - l2[j+1].smallerthan1mm / l2[j+1].ttlmassloading) * ratio + l2[j+1].smallerthan1mm / l2[j+1].ttlmassloading;
   			intF = 100 * intF;
   			//printf("%1.1f\t%1.1f\t%1.1f\n", l2[j].ttlmassloading, poweroftwo, l2[j+1].ttlmassloading);
-  			fprintf(outfile, "%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.2f\t%1.2f\t%1.1f\t%1.4f\t%1.4f\n", poweroftwo, intA, intSqrtA, intdist, intdistax, intx, inty, dir, intmean, intF);
+  			fprintf(outfile, "%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.2f\t%1.2f\t%1.1f\t%1.4f\t%1.4f\n", poweroftwo, intA, intSqrtA, intdist, intx, inty, dir, intmean, intF);
   			break;
   		}
   	}
   	if(j==jmax-1){break;}
   }
+  fclose(outfile);
+  
+  // 20250129
+  outfile = fopen("DF.txt", "w");
+
+  fprintf(outfile, "MaxS(kg/m2)\t0.1MaxS\t0.01MaxS\tD\tF\n");
+  fprintf(outfile, "%1.4f\t%1.4f\t%1.4f\t", maxS, 0.1*maxS, 0.01*maxS);
+  	for(j=0; j<jmax; j++){
+  		if(l2[j].ttlmassloading >= 0.1*maxS && l2[j+1].ttlmassloading < 0.1*maxS){
+  		ratio = (0.1*maxS - l2[j+1].ttlmassloading) / (l2[j].ttlmassloading - l2[j+1].ttlmassloading);
+  		intF =  (l2[j].smallerthan1mm / l2[j].ttlmassloading - l2[j+1].smallerthan1mm / l2[j+1].ttlmassloading) * ratio + l2[j+1].smallerthan1mm / l2[j+1].ttlmassloading;
+  		}
+  		
+  		if(l2[j].ttlmassloading >= 0.01*maxS && l2[j+1].ttlmassloading < 0.01*maxS){
+  		ratio = (0.01*maxS - l2[j+1].ttlmassloading) / (l2[j].ttlmassloading - l2[j+1].ttlmassloading);
+  		intA = (l2[j].dep[0] - l2[j + 1].dep[0]) * ratio + l2[j + 1].dep[0];
+  		break;
+  		}
+  	}
+  fprintf(outfile, "%1.4f\t%1.4f\n", intA, intF);
+  fclose(outfile);
+  
+  
+  // 20250129
+  outfile = fopen("Area_vs_S_summary.txt", "w");
+  sqrtAinit = (int)ceil(l2[0].dep[1]);
+  if(l2[j2-1].ttlmassloading > minS){minS = l2[j2-1].ttlmassloading;}
+  imax = (int)(log2S) - (int)ceil(log2(minS)) + 1;
+  maxsqrtA = ceil(maxsqrtA);
+
+  fprintf(outfile, "massloading(kg/m2)\tarea(sqkm)\tsqrtA(km)\tdist_from_vent(m)\tx(m)\ty(m)\tdir(deg)\tMean(phi)\tF(percent)\n");
+  
+  for(sqrtA=sqrtAinit; sqrtA<int(maxsqrtA); sqrtA++){
+	for(j=0; j<j2; j++){
+		if(l2[j].dep[1] <= double(sqrtA) && l2[j+1].dep[1] > double(sqrtA)){
+			ratio = ((double)(sqrtA) - l2[j].dep[1]) / (l2[j+1].dep[1] - l2[j].dep[1]);
+			intA = (l2[j+1].dep[0] - l2[j].dep[0]) * ratio + l2[j].dep[0];
+			intS = (l2[j+1].ttlmassloading - l2[j].ttlmassloading) * ratio + l2[j].ttlmassloading;
+			intx = (l2[j + 1].x - l2[j].x) * ratio + l2[j].x;
+			inty = (l2[j + 1].y - l2[j].y) * ratio + l2[j].y;
+			dir = calc_dir(l2[j].x, l2[j].y);
+			intdist  = sqrt(intx * intx + inty * inty);
+			 
+			if(j==0){
+			intdistax = sqrt(intx * intx + inty * inty);
+			intdistaxprevious = intdistax; intxprevious = intx; intyprevious = inty;
+			}else{
+			demon1 = intx - intxprevious;
+			demon2 = inty - intyprevious;
+			intdistax = sqrt(demon1 * demon1 + demon2 * demon2) + intdistaxprevious;
+			intdistaxprevious = intdistax; intxprevious = intx; intyprevious = inty;
+			} 			
+			
+			intmean = (l2[j + 1].meandiameter - l2[j].meandiameter) * ratio + l2[j].meandiameter;
+			intF =  (l2[j + 1].smallerthan1mm / l2[j + 1].ttlmassloading - l2[j].smallerthan1mm / l2[j].ttlmassloading) * ratio + l2[j].smallerthan1mm / l2[j].ttlmassloading;
+			intF = 100 * intF;
+			//printf("%1.1f\t%1.1f\t%1.1f\n", l2[j].ttlmassloading, poweroftwo, l2[j+1].ttlmassloading);
+			fprintf(outfile, "%1.4e\t%1.1f\t%1.1f\t%1.4f\t%1.2f\t%1.2f\t%1.1f\t%1.4f\t%1.4f\n", intS, intA, double(sqrtA), intdist, intx, inty, dir, intmean, intF);
+			break;
+		}
+	}	// end of j loop
+  } 		// end of sqrtA loop
   fclose(outfile);
 
 
@@ -2372,13 +2442,17 @@ void writetrajectory(int phiint, double *x, double *y, double *sig, double *r, S
 		if(WRITE_DEPCENT_TRAJECTORY) fclose(outfile);
 }
 
-void get_sdimcutoff(double *sigma_square, SEG *massreleased_str, int phidec){
+void get_sdimcutoff(double *sigma_square, SEG *massreleased_str, int phiint){
 	double averagedmassloading;
+	//int phisize;
+	
+	//phisize = phiint + MAX_GRAINSIZE + 1;
+	//printf("s\tsegregate\tsigmasquare\n");
 	for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
-		//printf("s=%d\tsegregated=%1.4e\tsigmasquare=%1.4e\n", s, massreleased_str[s].mass_from_ds[phidec], sigma_square[s * ZDIM]);
-		averagedmassloading = massreleased_str[s].mass_from_ds[phidec] / sigma_square[s * ZDIM] * PHIDECDIM;
+		averagedmassloading = massreleased_str[s].mass_from_ds[phiint] / sigma_square[s * ZDIM];
+		//printf("%d\t%d\t%1.4e\t%1.4e\t%1.4e\n", phisize, s, massreleased_str[s].mass_from_ds[phiint], sigma_square[s * ZDIM], averagedmassloading);
 		if(averagedmassloading < MINIMUM_CONTRIBUTION * S_DELTA_FOR_FALL_CALC){SDIMCUTOFF = s; break;}
-		//if(massreleased_str[s].mass_from_ds[phidec] / S_DELTA_FOR_FALL_CALC < MINIMUM_CONTRIBUTION){SDIMCUTOFF = s; break;}
+		//if(massreleased_str[s].mass_from_ds[phiint] / S_DELTA_FOR_FALL_CALC < MINIMUM_CONTRIBUTION){SDIMCUTOFF = s; break;}
 	}
 }
 

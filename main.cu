@@ -16,6 +16,27 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+/* CUDA Check*/
+#ifdef CUDA
+#include <cuda_runtime.h>
+
+#define CUDA_CHECK(call) do {                                      \
+    cudaError_t err = (call);                                      \
+    if (err != cudaSuccess) {                                      \
+        fprintf(stderr,                                            \
+                "CUDA error at %s:%d: %s\n",                       \
+                __FILE__, __LINE__, cudaGetErrorString(err));      \
+        exit(EXIT_FAILURE);                                        \
+    }                                                              \
+} while (0)
+
+#define CUDA_KERNEL_CHECK() do {                                   \
+    CUDA_CHECK(cudaGetLastError());                                \
+    CUDA_CHECK(cudaDeviceSynchronize());                           \
+} while (0)
+#endif
+// end of CUDA Check
+
 //#define TEPHRA2
 #define CUDA
 //#define TEST	//OUTPUT lspml.txt which is massloading contribution for each Location, particle Source, Phi in decimal

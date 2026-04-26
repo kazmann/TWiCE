@@ -242,13 +242,6 @@ int main(int argc, char *argv[]) {
 	read_wind(in_wind, wind_alt, wind_v, wind_dir, wind_tmp, wind_pres);
 	fclose(in_wind);
 
-	/*
-	outfile = fopen("wind_read.txt", "w");
-	char *header1 = "i\talt\ttemp\tpres\n";
-	printxyz(outfile, header1, windlinenum, wind_alt, wind_tmp, wind_pres);
-	fclose(outfile);*/
-	/* end of read wind file */
-
 	/* read loc file */
 	FILE *in_loc;
 	in_loc = fopen(argv[3], "r");
@@ -264,7 +257,6 @@ int main(int argc, char *argv[]) {
     read_loc(in_loc, locX, locY, locZ);
 	fclose(in_loc);
 	/* end of read loc file */
-
 
 	SDIM_FOR_PLUME_CALC = (S_MAX + S_DELTA_FOR_PLUME_CALC - 1) / S_DELTA_FOR_PLUME_CALC; // dimension of plume calculation; calculated plume should be longer than source plume
 	SDIM_FOR_FALL_CALC = S_MAX / S_DELTA_FOR_FALL_CALC; // dimension of source

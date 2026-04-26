@@ -17,7 +17,6 @@
 #include <unistd.h>
 
 /* CUDA Check*/
-#ifdef CUDA
 #include <cuda_runtime.h>
 
 #define CUDA_CHECK(call) do {                                      \
@@ -34,7 +33,6 @@
     CUDA_CHECK(cudaGetLastError());                                \
     CUDA_CHECK(cudaDeviceSynchronize());                           \
 } while (0)
-#endif
 // end of CUDA Check
 
 //#define TEPHRA2
@@ -637,19 +635,19 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 
 	// Allocate memory for result in Device
 	float *lspmlD, *ttlmlD, *sourceZD, *centXD, *centYD, *sigsqD, *locXD, *locYD, *locZD, *massreleasedD;
-	cudaMalloc((void**)&lspmlD, LSP * sizeof(float));
-	cudaMalloc((void**)&ttlmlD, LOCDIM * sizeof(float));
+	CUDA_CHECK(cudaMalloc((void**)&lspmlD, LSP * sizeof(float)));
+	CUDA_CHECK(cudaMalloc((void**)&ttlmlD, LOCDIM * sizeof(float)));
 
-	cudaMalloc((void**)&sourceZD, SDIMCUTOFF * sizeof(float));
-	cudaMalloc((void**)&centXD, PSZC * sizeof(float));
-	cudaMalloc((void**)&centYD, PSZC * sizeof(float));
-	cudaMalloc((void**)&sigsqD, PSZC * sizeof(float));
+	CUDA_CHECK(cudaMalloc((void**)&sourceZD, SDIMCUTOFF * sizeof(float)));
+	CUDA_CHECK(cudaMalloc((void**)&centXD, PSZC * sizeof(float)));
+	CUDA_CHECK(cudaMalloc((void**)&centYD, PSZC * sizeof(float)));
+	CUDA_CHECK(cudaMalloc((void**)&sigsqD, PSZC * sizeof(float)));
 
-	cudaMalloc((void**)&locXD, LOCDIM * sizeof(float));
-	cudaMalloc((void**)&locYD, LOCDIM * sizeof(float));
-	cudaMalloc((void**)&locZD, LOCDIM * sizeof(float));
+	CUDA_CHECK(cudaMalloc((void**)&locXD, LOCDIM * sizeof(float)));
+	CUDA_CHECK(cudaMalloc((void**)&locYD, LOCDIM * sizeof(float)));
+	CUDA_CHECK(cudaMalloc((void**)&locZD, LOCDIM * sizeof(float)));
 
-	cudaMalloc((void**)&massreleasedD, SDIMCUTOFF * PHIDECDIM * sizeof(float));
+	CUDA_CHECK(cudaMalloc((void**)&massreleasedD, SDIMCUTOFF * PHIDECDIM * sizeof(float)));
 
 	// Allocate memory for data in HOST and convert double to float
 	float *sourceZF, *centXF, *centYF, *sigsqF, *locXF, *locYF, *locZF, *massreleasedF;
@@ -694,15 +692,14 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 		massreleasedF[ipsc] = (float)massreleased[ips];
 	}
 
-	cudaMemcpy(sourceZD, sourceZF, SDIMCUTOFF * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(centXD, centXF, PSZC * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(centYD, centYF, PSZC * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(sigsqD, sigsqF, PSZC * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(locXD, locXF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(locYD, locYF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(locZD, locZF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice);
-
-	cudaMemcpy(massreleasedD, massreleasedF, SDIMCUTOFF * PHIDECDIM * sizeof(float), cudaMemcpyHostToDevice);
+	CUDA_CHECK(cudaMemcpy(sourceZD, sourceZF, SDIMCUTOFF * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(centXD, centXF, PSZC * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(centYD, centYF, PSZC * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(sigsqD, sigsqF, PSZC * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(locXD, locXF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(locYD, locYF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(locZD, locZF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(massreleasedD, massreleasedF, SDIMCUTOFF * PHIDECDIM * sizeof(float), cudaMemcpyHostToDevice));
 
 	//printf("s\tphidec\tmassreleased\n"); //see also Line535
 	N = LSP;

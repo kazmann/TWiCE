@@ -261,14 +261,10 @@ int main(int argc, char *argv[]) {
 	locY = (double *)malloc(LOCDIM * sizeof(double));
 	locZ = (double *)malloc(LOCDIM * sizeof(double));
 
-    read_loc(in_wind, locX, locY, locZ);
+    read_loc(in_loc, locX, locY, locZ);
 	fclose(in_loc);
 
-	/*outfile = fopen("loc_read.txt", "w");
-	header1 = "i\tX\tY\tZ\n";
-	printxyz(outfile, header1, LOCDIM, locX, locY, locZ);
-	fclose(outfile);*/
-
+	/* end of read loc file*/
 
 	SDIM_FOR_PLUME_CALC = (S_MAX + S_DELTA_FOR_PLUME_CALC - 1) / S_DELTA_FOR_PLUME_CALC; // dimension of plume calculation; calculated plume should be longer than source plume
 	SDIM_FOR_FALL_CALC = S_MAX / S_DELTA_FOR_FALL_CALC; // dimension of source

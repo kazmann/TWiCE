@@ -632,7 +632,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	* F in the name of parameter (e.g. ttlmlF) means such parameters are temporaly ones in CPU
 	*/
 
-	int N;
+	/* 1. Define size of arrays used in GPU */
 	
 	/* ---- dimensions and sizes --------------------------------------
 	 * PSZC : size of arrays indexed by (phidec, source, height_interval)
@@ -643,7 +643,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	 *        e.g., lspml
 	 */
 	size_t LSP;
-	int PSZC; 
+	size_t PSZC; 
 	
 	/* ---- index definitions --------------------------------------
 	 * phidec : phi (grain size) subdivision index
@@ -665,13 +665,39 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	PSZC = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZC = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
 	LSP = (size_t)LOCDIM * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
 
-	// Allocate memory for result in Host
+	/* end of 1.*/
+
+	/* 2. Host Buffer Allocation */
+
 	float *ttlmlF;
 	ttlmlF = (float *)malloc(LOCDIM * sizeof(float));
 	if (!ttlmlF) {
     fprintf(stderr, "Error: malloc failed for ttlmlF\n");
     exit(EXIT_FAILURE);
 	}
+
+	// Allocate host buffers used for double-to-float conversion
+	float *sourceZF, *centXF, *centYF, *sigsqF, *locXF, *locYF, *locZF, *massreleasedF;
+	sourceZF = (float *)malloc(SDIMCUTOFF * sizeof(float));
+	centXF = (float *)malloc(PSZC * sizeof(float));
+	centYF = (float *)malloc(PSZC * sizeof(float));
+	sigsqF = (float *)malloc(PSZC * sizeof(float));
+
+	locXF = (float *)malloc(LOCDIM * sizeof(float));
+	locYF = (float *)malloc(LOCDIM * sizeof(float));
+	locZF = (float *)malloc(LOCDIM * sizeof(float));
+
+	massreleasedF = (float *)malloc(PHIDECDIM * SDIMCUTOFF * sizeof(float));
+	
+	if (!ttlmlF || !sourceZF || !centXF || !centYF || !sigsqF ||
+    !locXF || !locYF || !locZF || !massreleasedF) {
+    fprintf(stderr, "Error: malloc failed for host buffers\n");
+    exit(EXIT_FAILURE);
+	}	
+
+	/* end of 2.*/
+
+	/* 3. Device Buffer Allocation */
 
 	/* ---- device arrays --------------------------------------------- */
 	/* GPU (device) memory buffers are grouped by their indexing scheme.
@@ -719,27 +745,18 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 
 	CUDA_CHECK(cudaMalloc((void**)&massreleasedD, SDIMCUTOFF * PHIDECDIM * sizeof(float)));
 
-	// Allocate memory for data in HOST and convert double to float
-	float *sourceZF, *centXF, *centYF, *sigsqF, *locXF, *locYF, *locZF, *massreleasedF;
-	sourceZF = (float *)malloc(SDIMCUTOFF * sizeof(float));
-	centXF = (float *)malloc(PSZC * sizeof(float));
-	centYF = (float *)malloc(PSZC * sizeof(float));
-	sigsqF = (float *)malloc(PSZC * sizeof(float));
+	/* end of 3. */
 
-	locXF = (float *)malloc(LOCDIM * sizeof(float));
-	locYF = (float *)malloc(LOCDIM * sizeof(float));
-	locZF = (float *)malloc(LOCDIM * sizeof(float));
-
-	massreleasedF = (float *)malloc(PHIDECDIM * SDIMCUTOFF * sizeof(float));
+	/* 4. Host Data Packing: Fixed Data */
 
 	for(int i = 0; i < SDIMCUTOFF; i++){
 		sourceZF[i] = (float)sourceZ[i];
 	}
 
-	for(int ipszc = 0; ipszc < PSZC; ipszc++){
-		phidec = ipszc / (SDIMCUTOFF * ZDIM);
-		s = (ipszc / ZDIM) % SDIMCUTOFF;
-		z = ipszc % ZDIM;
+	for(size_t ipszc = 0; ipszc < PSZC; ipszc++){
+		phidec = (int)(ipszc / (SDIMCUTOFF * ZDIM));
+		s      = (int)((ipszc / ZDIM) % SDIMCUTOFF);
+		z      = (int)(ipszc % ZDIM);
 		ipsz = (phidec * SDIM_FOR_FALL_CALC * ZDIM) + (s * ZDIM) + z;
 
 		centXF[ipszc] = (float)driftcentXs[ipsz];
@@ -749,12 +766,6 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 		//printf("centx%1.4f\tcenty%1.4f\tsig%1.4f\n", centXF[ipszc], centYF[ipszc], sigsqF[ipszc]);
 	}
 
-	for(int j = 0; j < LOCDIM; j++){
-		locXF[j] = (float)locX[j];
-		locYF[j] = (float)locY[j];
-		locZF[j] = (float)locZ[j];
-	}
-
 	for(int ipsc = 0; ipsc < SDIMCUTOFF * PHIDECDIM; ipsc++){
 		s = ipsc % SDIMCUTOFF;
 		phidec = (ipsc / SDIMCUTOFF);
@@ -762,21 +773,41 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 		massreleasedF[ipsc] = (float)massreleased[ips];
 	}
 
+	/* end of 4. */
+
+	/* 5. Host Data Packing: Location Data */
+
+	for(int j = 0; j < LOCDIM; j++){
+		locXF[j] = (float)locX[j];
+		locYF[j] = (float)locY[j];
+		locZF[j] = (float)locZ[j];
+	}
+
+	/* end of 5. */
+
+
+	/* 6. Copy Fixed Data to Device */
+
 	CUDA_CHECK(cudaMemcpy(sourceZD, sourceZF, SDIMCUTOFF * sizeof(float), cudaMemcpyHostToDevice));
 	CUDA_CHECK(cudaMemcpy(centXD, centXF, PSZC * sizeof(float), cudaMemcpyHostToDevice));
 	CUDA_CHECK(cudaMemcpy(centYD, centYF, PSZC * sizeof(float), cudaMemcpyHostToDevice));
 	CUDA_CHECK(cudaMemcpy(sigsqD, sigsqF, PSZC * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(massreleasedD, massreleasedF, SDIMCUTOFF * PHIDECDIM * sizeof(float), cudaMemcpyHostToDevice));
+	/* end of 6. */
+
+	/* 7. Copy Location Data to Device */
 	CUDA_CHECK(cudaMemcpy(locXD, locXF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
 	CUDA_CHECK(cudaMemcpy(locYD, locYF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
 	CUDA_CHECK(cudaMemcpy(locZD, locZF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
-	CUDA_CHECK(cudaMemcpy(massreleasedD, massreleasedF, SDIMCUTOFF * PHIDECDIM * sizeof(float), cudaMemcpyHostToDevice));
+	/* end of 7. */
 
-	//printf("s\tphidec\tmassreleased\n"); //see also Line535
+	/* 8. Kernel Launch */
+
 	if (LSP > INT_MAX) {
     fprintf(stderr, "Error: LSP too large: %zu\n", LSP);
     exit(EXIT_FAILURE);
 	}
-	N = (int)LSP;
+	int N = (int)LSP;
 	
 	int blocksize = 128;
 	dim3 block (blocksize, 1, 1);
@@ -784,23 +815,41 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 
 	funcD01a<<<grid, block>>>(N, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA, lspmlD, ttlmlD, sourceZD, centXD, centYD, sigsqD, locXD, locYD, locZD, massreleasedD);
 	CUDA_KERNEL_CHECK();
+
 	dim3 grid2 ((LOCDIM + block.x - 1) / block.x, 1, 1);
 	
 	funcD01b<<<grid2, block>>>(N, LOCDIM, lspmlD, ttlmlD);
 	CUDA_KERNEL_CHECK();
-	CUDA_CHECK(cudaMemcpy(ttlmlF, ttlmlD, LOCDIM * sizeof(float), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaDeviceSynchronize());　/* ensure all GPU work is done */
+	/* end of 8. */
 
+	/* 9. Copy Result to Host */
+	CUDA_CHECK(cudaMemcpy(ttlmlF, ttlmlD, LOCDIM * sizeof(float), cudaMemcpyDeviceToHost));
+	
 	for(int i = 0; i < LOCDIM; i++){
 		ttlml[i] = ttlmlF[i];
 	}
-	
-	free(sourceZF); free(centXF); free(centYF); free(locXF); free(locYF); free(locZF); free(ttlmlF);
-	free(sigsqF); free(massreleasedF); 
-	CUDA_CHECK(cudaFree(centXD)); CUDA_CHECK(cudaFree(centYD));
-	CUDA_CHECK(cudaFree(locXD)); CUDA_CHECK(cudaFree(locYD)); CUDA_CHECK(cudaFree(locZD));
-	CUDA_CHECK(cudaFree(lspmlD)); CUDA_CHECK(cudaFree(ttlmlD));
-	CUDA_CHECK(cudaFree(sourceZD)); CUDA_CHECK(cudaFree(sigsqD)); CUDA_CHECK(cudaFree(massreleasedD));
+	/* end of 9. */
 
+	/* 10. Cleanup */
+
+	/* free host buffers first */
+	/* location */
+	free(locXF); free(locYF); free(locZF); free(ttlmlF);
+	/* fixed */
+	free(sourceZF); free(massreleasedF);
+	free(centXF); free(centYF); free(sigsqF);
+
+	/* then free device buffers */
+	/* location */
+	CUDA_CHECK(cudaFree(locXD)); CUDA_CHECK(cudaFree(locYD)); CUDA_CHECK(cudaFree(locZD));
+	/* fixed */
+	CUDA_CHECK(cudaFree(sourceZD)); CUDA_CHECK(cudaFree(centXD)); CUDA_CHECK(cudaFree(centYD));
+	CUDA_CHECK(cudaFree(sigsqD)); CUDA_CHECK(cudaFree(massreleasedD));
+	/* work */
+	CUDA_CHECK(cudaFree(lspmlD)); CUDA_CHECK(cudaFree(ttlmlD));
+	
+	/* end of 10. */
 } // End of the function
 
 __global__ void funcD01a(int N, int zdim, int sdim, int phidecdim, float zdelta, float *lspmlD, float *ttlmlD, float *sourceZD, float *centX, float *centY, float *sigma_square, float *locX, float *locY, float *locZ, float *massreleased){

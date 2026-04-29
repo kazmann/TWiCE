@@ -820,7 +820,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	
 	funcD01b<<<grid2, block>>>(N, LOCDIM, lspmlD, ttlmlD);
 	CUDA_KERNEL_CHECK();
-	CUDA_CHECK(cudaDeviceSynchronize());　/* ensure all GPU work is done */
+	CUDA_CHECK(cudaDeviceSynchronize()); /* ensure all GPU work is done */
 	/* end of 8. */
 
 	/* 9. Copy Result to Host */

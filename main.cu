@@ -647,6 +647,103 @@ static void allocate_device_buffers(
 }
 /* end of #3*/
 
+/* 6. Copy Fixed Data to Device */
+static void copy_fixed_data_to_device(
+    float *sourceZD,
+    float *centXD,
+    float *centYD,
+    float *sigsqD,
+    float *massreleasedD,
+    float *sourceZF,
+    float *centXF,
+    float *centYF,
+    float *sigsqF,
+    float *massreleasedF,
+    size_t PSZC
+){
+    CUDA_CHECK(cudaMemcpy(sourceZD, sourceZF,
+        SDIMCUTOFF * sizeof(float), cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(cudaMemcpy(centXD, centXF,
+        PSZC * sizeof(float), cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(cudaMemcpy(centYD, centYF,
+        PSZC * sizeof(float), cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(cudaMemcpy(sigsqD, sigsqF,
+        PSZC * sizeof(float), cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(cudaMemcpy(massreleasedD, massreleasedF,
+        SDIMCUTOFF * PHIDECDIM * sizeof(float), cudaMemcpyHostToDevice));
+}
+/* end of #6 */
+
+/* 7. Copy Location Data to Device */
+static void copy_location_data_to_device(
+    float *locXD,
+    float *locYD,
+    float *locZD,
+    float *locXF,
+    float *locYF,
+    float *locZF
+){
+    CUDA_CHECK(cudaMemcpy(locXD, locXF,
+        LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(cudaMemcpy(locYD, locYF,
+        LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(cudaMemcpy(locZD, locZF,
+        LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
+}
+/* end of #7*/
+
+/* 8. Kernel Launch */
+static void launch_mass_loading_kernels(
+    float *lspmlD,
+    float *ttlmlD,
+    float *sourceZD,
+    float *centXD,
+    float *centYD,
+    float *sigsqD,
+    float *locXD,
+    float *locYD,
+    float *locZD,
+    float *massreleasedD,
+    size_t LSP
+){
+    if (LSP > INT_MAX) {
+        fprintf(stderr, "Error: LSP too large: %zu\n", LSP);
+        exit(EXIT_FAILURE);
+    }
+
+    int N = (int)LSP;
+
+    int blocksize = 128;
+    dim3 block(blocksize, 1, 1);
+    dim3 grid((N + block.x - 1) / block.x, 1, 1);
+
+    funcD01a<<<grid, block>>>(
+        N, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
+        lspmlD, ttlmlD,
+        sourceZD, centXD, centYD, sigsqD,
+        locXD, locYD, locZD,
+        massreleasedD
+    );
+    CUDA_KERNEL_CHECK();
+
+    dim3 grid2((LOCDIM + block.x - 1) / block.x, 1, 1);
+
+    funcD01b<<<grid2, block>>>(
+        N, LOCDIM,
+        lspmlD, ttlmlD
+    );
+    CUDA_KERNEL_CHECK();
+
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+/* end of #8*/
+
 /* #10 Clean up*/
 static void cleanup_mass_loading_buffers(
     float *locXF, float *locYF, float *locZF, float *ttlmlF,
@@ -840,55 +937,39 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 		ips = phidec * SDIM_FOR_FALL_CALC + s;
 		massreleasedF[ipsc] = (float)massreleased[ips];
 	}
-
 	/* end of 4. */
 
 	/* 5. Host Data Packing: Location Data */
-
 	for(int j = 0; j < LOCDIM; j++){
 		locXF[j] = (float)locX[j];
 		locYF[j] = (float)locY[j];
 		locZF[j] = (float)locZ[j];
 	}
-
 	/* end of 5. */
 
-
 	/* 6. Copy Fixed Data to Device */
-
-	CUDA_CHECK(cudaMemcpy(sourceZD, sourceZF, SDIMCUTOFF * sizeof(float), cudaMemcpyHostToDevice));
-	CUDA_CHECK(cudaMemcpy(centXD, centXF, PSZC * sizeof(float), cudaMemcpyHostToDevice));
-	CUDA_CHECK(cudaMemcpy(centYD, centYF, PSZC * sizeof(float), cudaMemcpyHostToDevice));
-	CUDA_CHECK(cudaMemcpy(sigsqD, sigsqF, PSZC * sizeof(float), cudaMemcpyHostToDevice));
-	CUDA_CHECK(cudaMemcpy(massreleasedD, massreleasedF, SDIMCUTOFF * PHIDECDIM * sizeof(float), cudaMemcpyHostToDevice));
+	copy_fixed_data_to_device(
+		sourceZD, centXD, centYD, sigsqD, massreleasedD,
+		sourceZF, centXF, centYF, sigsqF, massreleasedF,
+		PSZC
+	);
 	/* end of 6. */
 
 	/* 7. Copy Location Data to Device */
-	CUDA_CHECK(cudaMemcpy(locXD, locXF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
-	CUDA_CHECK(cudaMemcpy(locYD, locYF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
-	CUDA_CHECK(cudaMemcpy(locZD, locZF, LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
+	copy_location_data_to_device(
+		locXD, locYD, locZD,
+		locXF, locYF, locZF
+	);
 	/* end of 7. */
 
 	/* 8. Kernel Launch */
-
-	if (LSP > INT_MAX) {
-    fprintf(stderr, "Error: LSP too large: %zu\n", LSP);
-    exit(EXIT_FAILURE);
-	}
-	int N = (int)LSP;
-	
-	int blocksize = 128;
-	dim3 block (blocksize, 1, 1);
- 	dim3 grid  ((N + block.x - 1)/ block.x, 1, 1);
-
-	funcD01a<<<grid, block>>>(N, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA, lspmlD, ttlmlD, sourceZD, centXD, centYD, sigsqD, locXD, locYD, locZD, massreleasedD);
-	CUDA_KERNEL_CHECK();
-
-	dim3 grid2 ((LOCDIM + block.x - 1) / block.x, 1, 1);
-	
-	funcD01b<<<grid2, block>>>(N, LOCDIM, lspmlD, ttlmlD);
-	CUDA_KERNEL_CHECK();
-	CUDA_CHECK(cudaDeviceSynchronize()); /* ensure all GPU work is done */
+	launch_mass_loading_kernels(
+		lspmlD, ttlmlD,
+		sourceZD, centXD, centYD, sigsqD,
+		locXD, locYD, locZD,
+		massreleasedD,
+		LSP
+	);
 	/* end of 8. */
 
 	/* 9. Copy Result to Host */

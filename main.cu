@@ -615,6 +615,81 @@ void drift_from_a_certain_source(double *source_x, double *source_y, double *sou
 
 #ifdef CUDA
 // FUNCTIONS FOR CUDA
+
+/* 3. Device Buffer Allocation */
+static void allocate_device_buffers(
+    float **lspmlD,
+    float **ttlmlD,
+    float **sourceZD,
+    float **centXD,
+    float **centYD,
+    float **sigsqD,
+    float **locXD,
+    float **locYD,
+    float **locZD,
+    float **massreleasedD,
+    size_t LSP,
+    size_t PSZC){
+    CUDA_CHECK(cudaMalloc((void**)lspmlD, LSP * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void**)ttlmlD, LOCDIM * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc((void**)sourceZD, SDIMCUTOFF * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void**)centXD, PSZC * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void**)centYD, PSZC * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void**)sigsqD, PSZC * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc((void**)locXD, LOCDIM * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void**)locYD, LOCDIM * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void**)locZD, LOCDIM * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc((void**)massreleasedD,
+        SDIMCUTOFF * PHIDECDIM * sizeof(float)));
+}
+/* end of #3*/
+
+/* #10 Clean up*/
+static void cleanup_mass_loading_buffers(
+    float *locXF, float *locYF, float *locZF, float *ttlmlF,
+    float *sourceZF, float *massreleasedF,
+    float *centXF, float *centYF, float *sigsqF,
+    float *locXD, float *locYD, float *locZD,
+    float *sourceZD, float *centXD, float *centYD,
+    float *sigsqD, float *massreleasedD,
+    float *lspmlD, float *ttlmlD){
+    /* free host buffers first */
+    /* location */
+    free(locXF);
+    free(locYF);
+    free(locZF);
+    free(ttlmlF);
+
+    /* fixed */
+    free(sourceZF);
+    free(massreleasedF);
+    free(centXF);
+    free(centYF);
+    free(sigsqF);
+
+    /* then free device buffers */
+    /* location */
+    CUDA_CHECK(cudaFree(locXD));
+    CUDA_CHECK(cudaFree(locYD));
+    CUDA_CHECK(cudaFree(locZD));
+
+    /* fixed */
+    CUDA_CHECK(cudaFree(sourceZD));
+    CUDA_CHECK(cudaFree(centXD));
+    CUDA_CHECK(cudaFree(centYD));
+    CUDA_CHECK(cudaFree(sigsqD));
+    CUDA_CHECK(cudaFree(massreleasedD));
+
+    /* work */
+    CUDA_CHECK(cudaFree(lspmlD));
+    CUDA_CHECK(cudaFree(ttlmlD));
+}
+/* #End of #10 Cleanup*/
+
+
 // D01a and D01b FOR GPU PROCESSING
 // Calculate mass loading of a certain grain size on a certain point on the ground (Sloc) from a certain source: Sloc(phi, s)
 void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs, double *sigma_square, double *locX, double *locY, double *locZ, double *lspml, double *ttlml, double *massreleased){
@@ -724,26 +799,19 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	* Here, a particle cloud means a group of particles of a given
 	* grain-size subdivision (phidec) released from a plume source (s).
 	*/
+
 	float *lspmlD, *ttlmlD;
 	float *sourceZD, *centXD, *centYD, *sigsqD;
 	float *locXD, *locYD, *locZD;
 	float *massreleasedD;
-	
-	// Allocate memory for result in Device
-	//float *lspmlD, *ttlmlD, *sourceZD, *centXD, *centYD, *sigsqD, *locXD, *locYD, *locZD, *massreleasedD;
-	CUDA_CHECK(cudaMalloc((void**)&lspmlD, LSP * sizeof(float)));
-	CUDA_CHECK(cudaMalloc((void**)&ttlmlD, LOCDIM * sizeof(float)));
 
-	CUDA_CHECK(cudaMalloc((void**)&sourceZD, SDIMCUTOFF * sizeof(float)));
-	CUDA_CHECK(cudaMalloc((void**)&centXD, PSZC * sizeof(float)));
-	CUDA_CHECK(cudaMalloc((void**)&centYD, PSZC * sizeof(float)));
-	CUDA_CHECK(cudaMalloc((void**)&sigsqD, PSZC * sizeof(float)));
-
-	CUDA_CHECK(cudaMalloc((void**)&locXD, LOCDIM * sizeof(float)));
-	CUDA_CHECK(cudaMalloc((void**)&locYD, LOCDIM * sizeof(float)));
-	CUDA_CHECK(cudaMalloc((void**)&locZD, LOCDIM * sizeof(float)));
-
-	CUDA_CHECK(cudaMalloc((void**)&massreleasedD, SDIMCUTOFF * PHIDECDIM * sizeof(float)));
+	allocate_device_buffers(
+		&lspmlD, &ttlmlD,
+		&sourceZD, &centXD, &centYD, &sigsqD,
+		&locXD, &locYD, &locZD,
+		&massreleasedD,
+		LSP, PSZC
+	);
 
 	/* end of 3. */
 
@@ -832,23 +900,15 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	/* end of 9. */
 
 	/* 10. Cleanup */
-
-	/* free host buffers first */
-	/* location */
-	free(locXF); free(locYF); free(locZF); free(ttlmlF);
-	/* fixed */
-	free(sourceZF); free(massreleasedF);
-	free(centXF); free(centYF); free(sigsqF);
-
-	/* then free device buffers */
-	/* location */
-	CUDA_CHECK(cudaFree(locXD)); CUDA_CHECK(cudaFree(locYD)); CUDA_CHECK(cudaFree(locZD));
-	/* fixed */
-	CUDA_CHECK(cudaFree(sourceZD)); CUDA_CHECK(cudaFree(centXD)); CUDA_CHECK(cudaFree(centYD));
-	CUDA_CHECK(cudaFree(sigsqD)); CUDA_CHECK(cudaFree(massreleasedD));
-	/* work */
-	CUDA_CHECK(cudaFree(lspmlD)); CUDA_CHECK(cudaFree(ttlmlD));
-	
+	cleanup_mass_loading_buffers(
+		locXF, locYF, locZF, ttlmlF,
+		sourceZF, massreleasedF,
+		centXF, centYF, sigsqF,
+		locXD, locYD, locZD,
+		sourceZD, centXD, centYD,
+		sigsqD, massreleasedD,
+		lspmlD, ttlmlD
+	);
 	/* end of 10. */
 } // End of the function
 

@@ -618,15 +618,38 @@ void drift_from_a_certain_source(double *source_x, double *source_y, double *sou
 // D01a FOR GPU PROCESSING
 // Calculate mass loading of a certain grain size on a certain point on the ground (Sloc) from a certain source: Sloc(phi, s)
 void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs, double *sigma_square, double *locX, double *locY, double *locZ, double *lspml, double *ttlml, double *massreleased){
+	
 	int N;
-	int PSZC; // driftcentXs, Y, sigmasquare
-	int LSP; // 
+	
+	/* ---- dimensions and sizes --------------------------------------
+	 * PSZC : size of arrays indexed by (phidec, source, vertical-layer)
+	 *        e.g., driftcentXs, driftcentYs, sigma_square
+	 *
+	 * LSP  : size of arrays indexed by (location, phidec, source)
+	 *        e.g., lspml
+	 */
+	size_t LSP;
+	int PSZC; 
+	
+	/* ---- index definitions --------------------------------------
+	 * phidec : phi (grain size) subdivision index
+ 	 * s      : source index along plume axis
+ 	 * z      : vertical layer index
+	 */
 	int phidec, s, z;
-	int ipsz;	// counter for arrays having grainsize(phidec) - plumelength(s; non cut off) - height(z) order such as driftX_s 
-	int ips;  // counter for arrays having grainsize(phidec) - plumelength(s; non cut off) order such as massreleased
+
+	/* ---- flattened indices -----------------------------------------
+	* Multi-dimensional indices (phidec, source, z) are mapped to
+ 	* 1D arrays for GPU memory access (CUDA global memory is linear).
+	*
+	* ipsz : index for (phidec, source, vertical-layer)
+	* ips  : index for (phidec, source)
+	*/
+	int ipsz;
+	int ips;
 
 	PSZC = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZC = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
-	LSP = LOCDIM * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
+	LSP = (size_t)LOCDIM * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
 
 	// Allocate memory for result in Host
 	float *lspmlF, *ttlmlF;
@@ -702,16 +725,18 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	CUDA_CHECK(cudaMemcpy(massreleasedD, massreleasedF, SDIMCUTOFF * PHIDECDIM * sizeof(float), cudaMemcpyHostToDevice));
 
 	//printf("s\tphidec\tmassreleased\n"); //see also Line535
-	N = LSP;
+	N = (int)LSP;
 	int blocksize = 128;
 	dim3 block (blocksize, 1, 1);
  	dim3 grid  ((N + block.x - 1)/ block.x, 1, 1);
 
 	funcD01a<<<grid, block>>>(N, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA, lspmlD, ttlmlD, sourceZD, centXD, centYD, sigsqD, locXD, locYD, locZD, massreleasedD);
-
+	CUDA_KERNEL_CHECK();
 	dim3 grid2 ((LOCDIM + block.x - 1) / block.x, 1, 1);
+	
 	funcD01b<<<grid2, block>>>(N, LOCDIM, lspmlD, ttlmlD);
-	cudaMemcpy(ttlmlF, ttlmlD, LOCDIM * sizeof(float), cudaMemcpyDeviceToHost);
+	CUDA_KERNEL_CHECK();
+	CUDA_CHECK(cudaMemcpy(ttlmlF, ttlmlD, LOCDIM * sizeof(float), cudaMemcpyDeviceToHost));
 
 	for(int i = 0; i < LOCDIM; i++){
 		ttlml[i] = ttlmlF[i];
@@ -719,10 +744,10 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	
 	free(sourceZF); free(centXF); free(centYF); free(locXF); free(locYF); free(locZF); free(lspmlF); free(ttlmlF);
 	free(sigsqF); free(massreleasedF); 
-	cudaFree(centXD); cudaFree(centYD);
-	cudaFree(locXD); cudaFree(locYD); cudaFree(locZD);
-	cudaFree(lspmlD); cudaFree(ttlmlD);
-	cudaFree(sourceZD); cudaFree(sigsqD); cudaFree(massreleasedD);
+	CUDA_CHECK(cudaFree(centXD)); CUDA_CHECK(cudaFree(centYD));
+	CUDA_CHECK(cudaFree(locXD)); CUDA_CHECK(cudaFree(locYD)); CUDA_CHECK(cudaFree(locZD));
+	CUDA_CHECK(cudaFree(lspmlD)); CUDA_CHECK(cudaFree(ttlmlD));
+	CUDA_CHECK(cudaFree(sourceZD)); CUDA_CHECK(cudaFree(sigsqD)); CUDA_CHECK(cudaFree(massreleasedD));
 
 } // End of the function
 

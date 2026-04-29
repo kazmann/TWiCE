@@ -744,6 +744,25 @@ static void launch_mass_loading_kernels(
 }
 /* end of #8*/
 
+/* 9. Copy Result to Host */
+static void copy_result_to_host(
+    float *ttlmlF,
+    float *ttlmlD,
+    double *ttlml
+){
+    CUDA_CHECK(cudaMemcpy(
+        ttlmlF,
+        ttlmlD,
+        LOCDIM * sizeof(float),
+        cudaMemcpyDeviceToHost
+    ));
+
+    for(int i = 0; i < LOCDIM; i++){
+        ttlml[i] = ttlmlF[i];
+    }
+}
+/* end of #9 */
+
 /* #10 Clean up*/
 static void cleanup_mass_loading_buffers(
     float *locXF, float *locYF, float *locZF, float *ttlmlF,
@@ -973,11 +992,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	/* end of 8. */
 
 	/* 9. Copy Result to Host */
-	CUDA_CHECK(cudaMemcpy(ttlmlF, ttlmlD, LOCDIM * sizeof(float), cudaMemcpyDeviceToHost));
-	
-	for(int i = 0; i < LOCDIM; i++){
-		ttlml[i] = ttlmlF[i];
-	}
+	copy_result_to_host(ttlmlF, ttlmlD, ttlml);
 	/* end of 9. */
 
 	/* 10. Cleanup */

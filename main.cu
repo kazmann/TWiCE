@@ -637,6 +637,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	/* ---- dimensions and sizes --------------------------------------
 	 * PSZC : size of arrays indexed by (phidec, source, height_interval)
 	 *        e.g., driftcentXs, driftcentYs, sigma_square
+	 *        PSZC stands Particle size, Souce and Z of a particle Cloud
 	 *
 	 * LSP  : size of arrays indexed by (location, phidec, source)
 	 *        e.g., lspml

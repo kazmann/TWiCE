@@ -614,6 +614,50 @@ void drift_from_a_certain_source(double *source_x, double *source_y, double *sou
 } // End of the function (F20)
 
 #ifdef CUDA
+
+// Structures
+typedef struct {
+    float *lspmlD;
+    float *ttlmlD;
+
+    float *sourceZD;
+    float *centXD;
+    float *centYD;
+    float *sigsqD;
+
+    float *locXD;
+    float *locYD;
+    float *locZD;
+
+    float *massreleasedD;
+} DeviceBuffers;
+
+
+typedef struct {
+    float *ttlmlF;
+
+    float *sourceZF;
+    float *centXF;
+    float *centYF;
+    float *sigsqF;
+
+    float *locXF;
+    float *locYF;
+    float *locZF;
+
+    float *massreleasedF;
+} HostBuffers;
+
+
+typedef struct {
+    size_t PSZC;
+    size_t LSP;
+
+    DeviceBuffers device;
+    HostBuffers host;
+} Buffers;
+//
+
 // FUNCTIONS FOR CUDA
 
 /* 3. Device Buffer Allocation */
@@ -648,53 +692,68 @@ static void allocate_device_buffers(
 /* end of #3*/
 
 /* 6. Copy Fixed Data to Device */
-static void copy_fixed_data_to_device(
-    float *sourceZD,
-    float *centXD,
-    float *centYD,
-    float *sigsqD,
-    float *massreleasedD,
-    float *sourceZF,
-    float *centXF,
-    float *centYF,
-    float *sigsqF,
-    float *massreleasedF,
-    size_t PSZC
-){
-    CUDA_CHECK(cudaMemcpy(sourceZD, sourceZF,
-        SDIMCUTOFF * sizeof(float), cudaMemcpyHostToDevice));
+static void copy_fixed_data_to_device_buffers(Buffers *b)
+{
+	CUDA_CHECK(cudaMemcpy(
+		b->device.sourceZD,
+		b->host.sourceZF,
+		SDIMCUTOFF * sizeof(float),
+		cudaMemcpyHostToDevice
+	));
 
-    CUDA_CHECK(cudaMemcpy(centXD, centXF,
-        PSZC * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(
+		b->device.centXD,
+		b->host.centXF,
+		b->PSZC * sizeof(float),
+		cudaMemcpyHostToDevice
+	));
 
-    CUDA_CHECK(cudaMemcpy(centYD, centYF,
-        PSZC * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(
+		b->device.centYD,
+		b->host.centYF,
+		b->PSZC * sizeof(float),
+		cudaMemcpyHostToDevice
+	));
 
-    CUDA_CHECK(cudaMemcpy(sigsqD, sigsqF,
-        PSZC * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(
+		b->device.sigsqD,
+		b->host.sigsqF,
+		b->PSZC * sizeof(float),
+		cudaMemcpyHostToDevice
+	));
 
-    CUDA_CHECK(cudaMemcpy(massreleasedD, massreleasedF,
-        SDIMCUTOFF * PHIDECDIM * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(
+		b->device.massreleasedD,
+		b->host.massreleasedF,
+		SDIMCUTOFF * PHIDECDIM * sizeof(float),
+		cudaMemcpyHostToDevice
+	));
 }
-/* end of #6 */
+/* end of 6 */
 
 /* 7. Copy Location Data to Device */
-static void copy_location_data_to_device(
-    float *locXD,
-    float *locYD,
-    float *locZD,
-    float *locXF,
-    float *locYF,
-    float *locZF
-){
-    CUDA_CHECK(cudaMemcpy(locXD, locXF,
-        LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
+static void copy_location_data_to_device_buffers(Buffers *b)
+{
+    CUDA_CHECK(cudaMemcpy(
+        b->device.locXD,
+        b->host.locXF,
+        LOCDIM * sizeof(float),
+        cudaMemcpyHostToDevice
+    ));
 
-    CUDA_CHECK(cudaMemcpy(locYD, locYF,
-        LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(
+        b->device.locYD,
+        b->host.locYF,
+        LOCDIM * sizeof(float),
+        cudaMemcpyHostToDevice
+    ));
 
-    CUDA_CHECK(cudaMemcpy(locZD, locZF,
-        LOCDIM * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(
+        b->device.locZD,
+        b->host.locZF,
+        LOCDIM * sizeof(float),
+        cudaMemcpyHostToDevice
+    ));
 }
 /* end of #7*/
 
@@ -763,47 +822,35 @@ static void copy_result_to_host(
 }
 /* end of #9 */
 
-/* #10 Clean up*/
-static void cleanup_mass_loading_buffers(
-    float *locXF, float *locYF, float *locZF, float *ttlmlF,
-    float *sourceZF, float *massreleasedF,
-    float *centXF, float *centYF, float *sigsqF,
-    float *locXD, float *locYD, float *locZD,
-    float *sourceZD, float *centXD, float *centYD,
-    float *sigsqD, float *massreleasedD,
-    float *lspmlD, float *ttlmlD){
-    /* free host buffers first */
-    /* location */
-    free(locXF);
-    free(locYF);
-    free(locZF);
-    free(ttlmlF);
+/* 10 Cleanup new */
+static void cleanup_buffers(Buffers *b)
+{
+	free(b->host.locXF);
+	free(b->host.locYF);
+	free(b->host.locZF);
+	free(b->host.ttlmlF);
 
-    /* fixed */
-    free(sourceZF);
-    free(massreleasedF);
-    free(centXF);
-    free(centYF);
-    free(sigsqF);
+	free(b->host.sourceZF);
+	free(b->host.massreleasedF);
+	free(b->host.centXF);
+	free(b->host.centYF);
+	free(b->host.sigsqF);
 
-    /* then free device buffers */
-    /* location */
-    CUDA_CHECK(cudaFree(locXD));
-    CUDA_CHECK(cudaFree(locYD));
-    CUDA_CHECK(cudaFree(locZD));
+	CUDA_CHECK(cudaFree(b->device.locXD));
+	CUDA_CHECK(cudaFree(b->device.locYD));
+	CUDA_CHECK(cudaFree(b->device.locZD));
 
-    /* fixed */
-    CUDA_CHECK(cudaFree(sourceZD));
-    CUDA_CHECK(cudaFree(centXD));
-    CUDA_CHECK(cudaFree(centYD));
-    CUDA_CHECK(cudaFree(sigsqD));
-    CUDA_CHECK(cudaFree(massreleasedD));
+	CUDA_CHECK(cudaFree(b->device.sourceZD));
+	CUDA_CHECK(cudaFree(b->device.centXD));
+	CUDA_CHECK(cudaFree(b->device.centYD));
+	CUDA_CHECK(cudaFree(b->device.sigsqD));
+	CUDA_CHECK(cudaFree(b->device.massreleasedD));
 
-    /* work */
-    CUDA_CHECK(cudaFree(lspmlD));
-    CUDA_CHECK(cudaFree(ttlmlD));
+	CUDA_CHECK(cudaFree(b->device.lspmlD));
+	CUDA_CHECK(cudaFree(b->device.ttlmlD));
 }
-/* #End of #10 Cleanup*/
+/* end of 10b */
+
 
 
 // D01a and D01b FOR GPU PROCESSING
@@ -930,6 +977,42 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	);
 
 	/* end of 3. */
+		
+	/* --- bridge: existing pointers → struct (no behavior change) --- */
+
+	Buffers b;
+
+	b.PSZC = PSZC;
+	b.LSP  = LSP;
+
+	/* device */
+	b.device.lspmlD = lspmlD;
+	b.device.ttlmlD = ttlmlD;
+
+	b.device.sourceZD = sourceZD;
+	b.device.centXD   = centXD;
+	b.device.centYD   = centYD;
+	b.device.sigsqD   = sigsqD;
+
+	b.device.locXD = locXD;
+	b.device.locYD = locYD;
+	b.device.locZD = locZD;
+
+	b.device.massreleasedD = massreleasedD;
+
+	/* host */
+	b.host.ttlmlF = ttlmlF;
+
+	b.host.sourceZF = sourceZF;
+	b.host.centXF   = centXF;
+	b.host.centYF   = centYF;
+	b.host.sigsqF   = sigsqF;
+
+	b.host.locXF = locXF;
+	b.host.locYF = locYF;
+	b.host.locZF = locZF;
+
+	b.host.massreleasedF = massreleasedF;
 
 	/* 4. Host Data Packing: Fixed Data */
 
@@ -967,18 +1050,11 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	/* end of 5. */
 
 	/* 6. Copy Fixed Data to Device */
-	copy_fixed_data_to_device(
-		sourceZD, centXD, centYD, sigsqD, massreleasedD,
-		sourceZF, centXF, centYF, sigsqF, massreleasedF,
-		PSZC
-	);
+	copy_fixed_data_to_device_buffers(&b);
 	/* end of 6. */
 
 	/* 7. Copy Location Data to Device */
-	copy_location_data_to_device(
-		locXD, locYD, locZD,
-		locXF, locYF, locZF
-	);
+	copy_location_data_to_device_buffers(&b);
 	/* end of 7. */
 
 	/* 8. Kernel Launch */
@@ -996,16 +1072,9 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	/* end of 9. */
 
 	/* 10. Cleanup */
-	cleanup_mass_loading_buffers(
-		locXF, locYF, locZF, ttlmlF,
-		sourceZF, massreleasedF,
-		centXF, centYF, sigsqF,
-		locXD, locYD, locZD,
-		sourceZD, centXD, centYD,
-		sigsqD, massreleasedD,
-		lspmlD, ttlmlD
-	);
+	cleanup_buffers(&b);
 	/* end of 10. */
+
 } // End of the function
 
 __global__ void funcD01a(int N, int zdim, int sdim, int phidecdim, float zdelta, float *lspmlD, float *ttlmlD, float *sourceZD, float *centX, float *centY, float *sigma_square, float *locX, float *locY, float *locZ, float *massreleased){

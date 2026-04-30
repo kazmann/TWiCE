@@ -661,32 +661,36 @@ typedef struct {
 // FUNCTIONS FOR CUDA
 
 /* 3. Device Buffer Allocation */
-static void allocate_device_buffers(
-    float **lspmlD,
-    float **ttlmlD,
-    float **sourceZD,
-    float **centXD,
-    float **centYD,
-    float **sigsqD,
-    float **locXD,
-    float **locYD,
-    float **locZD,
-    float **massreleasedD,
-    size_t LSP,
-    size_t PSZC){
-    CUDA_CHECK(cudaMalloc((void**)lspmlD, LSP * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)ttlmlD, LOCDIM * sizeof(float)));
+static void allocate_device_buffers_struct(Buffers *b)
+{
+    CUDA_CHECK(cudaMalloc((void**)&b->device.lspmlD,
+        b->LSP * sizeof(float)));
 
-    CUDA_CHECK(cudaMalloc((void**)sourceZD, SDIMCUTOFF * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)centXD, PSZC * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)centYD, PSZC * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)sigsqD, PSZC * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void**)&b->device.ttlmlD,
+        LOCDIM * sizeof(float)));
 
-    CUDA_CHECK(cudaMalloc((void**)locXD, LOCDIM * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)locYD, LOCDIM * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)locZD, LOCDIM * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void**)&b->device.sourceZD,
+        SDIMCUTOFF * sizeof(float)));
 
-    CUDA_CHECK(cudaMalloc((void**)massreleasedD,
+    CUDA_CHECK(cudaMalloc((void**)&b->device.centXD,
+        b->PSZC * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc((void**)&b->device.centYD,
+        b->PSZC * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc((void**)&b->device.sigsqD,
+        b->PSZC * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc((void**)&b->device.locXD,
+        LOCDIM * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc((void**)&b->device.locYD,
+        LOCDIM * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc((void**)&b->device.locZD,
+        LOCDIM * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc((void**)&b->device.massreleasedD,
         SDIMCUTOFF * PHIDECDIM * sizeof(float)));
 }
 /* end of #3*/
@@ -956,43 +960,16 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	* Here, a particle cloud means a group of particles of a given
 	* grain-size subdivision (phidec) released from a plume source (s).
 	*/
-
-	float *lspmlD, *ttlmlD;
-	float *sourceZD, *centXD, *centYD, *sigsqD;
-	float *locXD, *locYD, *locZD;
-	float *massreleasedD;
-
-	allocate_device_buffers(
-		&lspmlD, &ttlmlD,
-		&sourceZD, &centXD, &centYD, &sigsqD,
-		&locXD, &locYD, &locZD,
-		&massreleasedD,
-		LSP, PSZC
-	);
-
-	/* end of 3. */
-		
-	/* --- bridge: existing pointers → struct (no behavior change) --- */
-
 	Buffers b;
 
 	b.PSZC = PSZC;
 	b.LSP  = LSP;
 
-	/* device */
-	b.device.lspmlD = lspmlD;
-	b.device.ttlmlD = ttlmlD;
-
-	b.device.sourceZD = sourceZD;
-	b.device.centXD   = centXD;
-	b.device.centYD   = centYD;
-	b.device.sigsqD   = sigsqD;
-
-	b.device.locXD = locXD;
-	b.device.locYD = locYD;
-	b.device.locZD = locZD;
-
-	b.device.massreleasedD = massreleasedD;
+	allocate_device_buffers_struct(&b);
+	
+	/* --- bridge: existing pointers → struct (no behavior change) --- */
+	b.PSZC = PSZC;
+	b.LSP  = LSP;
 
 	/* host */
 	b.host.ttlmlF = ttlmlF;
@@ -1007,6 +984,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	b.host.locZF = locZF;
 
 	b.host.massreleasedF = massreleasedF;
+	/* end of 3. */
 
 	/* 4. Host Data Packing: Fixed Data */
 

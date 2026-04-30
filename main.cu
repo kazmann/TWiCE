@@ -758,25 +758,14 @@ static void copy_location_data_to_device_buffers(Buffers *b)
 /* end of #7*/
 
 /* 8. Kernel Launch */
-static void launch_mass_loading_kernels(
-    float *lspmlD,
-    float *ttlmlD,
-    float *sourceZD,
-    float *centXD,
-    float *centYD,
-    float *sigsqD,
-    float *locXD,
-    float *locYD,
-    float *locZD,
-    float *massreleasedD,
-    size_t LSP
-){
-    if (LSP > INT_MAX) {
-        fprintf(stderr, "Error: LSP too large: %zu\n", LSP);
+static void launch_mass_loading_kernels_buffers(Buffers *b)
+{
+    if (b->LSP > INT_MAX) {
+        fprintf(stderr, "Error: LSP too large: %zu\n", b->LSP);
         exit(EXIT_FAILURE);
     }
 
-    int N = (int)LSP;
+    int N = (int)b->LSP;
 
     int blocksize = 128;
     dim3 block(blocksize, 1, 1);
@@ -784,18 +773,26 @@ static void launch_mass_loading_kernels(
 
     funcD01a<<<grid, block>>>(
         N, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
-        lspmlD, ttlmlD,
-        sourceZD, centXD, centYD, sigsqD,
-        locXD, locYD, locZD,
-        massreleasedD
+        b->device.lspmlD,
+        b->device.ttlmlD,
+        b->device.sourceZD,
+        b->device.centXD,
+        b->device.centYD,
+        b->device.sigsqD,
+        b->device.locXD,
+        b->device.locYD,
+        b->device.locZD,
+        b->device.massreleasedD
     );
     CUDA_KERNEL_CHECK();
 
     dim3 grid2((LOCDIM + block.x - 1) / block.x, 1, 1);
 
     funcD01b<<<grid2, block>>>(
-        N, LOCDIM,
-        lspmlD, ttlmlD
+        N,
+        LOCDIM,
+        b->device.lspmlD,
+        b->device.ttlmlD
     );
     CUDA_KERNEL_CHECK();
 
@@ -804,20 +801,17 @@ static void launch_mass_loading_kernels(
 /* end of #8*/
 
 /* 9. Copy Result to Host */
-static void copy_result_to_host(
-    float *ttlmlF,
-    float *ttlmlD,
-    double *ttlml
-){
+static void copy_result_to_host_buffers(Buffers *b, double *ttlml)
+{
     CUDA_CHECK(cudaMemcpy(
-        ttlmlF,
-        ttlmlD,
+        b->host.ttlmlF,
+        b->device.ttlmlD,
         LOCDIM * sizeof(float),
         cudaMemcpyDeviceToHost
     ));
 
     for(int i = 0; i < LOCDIM; i++){
-        ttlml[i] = ttlmlF[i];
+        ttlml[i] = b->host.ttlmlF[i];
     }
 }
 /* end of #9 */
@@ -1058,17 +1052,11 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	/* end of 7. */
 
 	/* 8. Kernel Launch */
-	launch_mass_loading_kernels(
-		lspmlD, ttlmlD,
-		sourceZD, centXD, centYD, sigsqD,
-		locXD, locYD, locZD,
-		massreleasedD,
-		LSP
-	);
+	launch_mass_loading_kernels_buffers(&b);
 	/* end of 8. */
 
 	/* 9. Copy Result to Host */
-	copy_result_to_host(ttlmlF, ttlmlD, ttlml);
+	copy_result_to_host_buffers(&b, ttlml);
 	/* end of 9. */
 
 	/* 10. Cleanup */

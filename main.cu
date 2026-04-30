@@ -695,6 +695,67 @@ static void allocate_device_buffers_struct(Buffers *b)
 }
 /* end of #3*/
 
+/* 4. Host Data Packing: Fixed Data */
+static void pack_fixed_data_buffers(
+    Buffers *b,
+    double *sourceZ,
+    double *driftcentXs,
+    double *driftcentYs,
+    double *sigma_square,
+    double *massreleased
+){
+	int phidec, s, z;  // indices for phi subdivision, source, and height level
+
+	/*
+	* CUDA device memory is handled as linear memory.
+	* Therefore, multi-dimensional indices are flattened into
+	* one-dimensional array indices before data transfer to GPU.
+	*/
+	int ipsz;  // flattened index for (phidec, s, z)
+	int ips;   // flattened index for (phidec, s)
+
+    for(int i = 0; i < SDIMCUTOFF; i++){
+        b->host.sourceZF[i] = (float)sourceZ[i];
+    }
+
+    for(size_t ipszc = 0; ipszc < b->PSZC; ipszc++){
+        phidec = (int)(ipszc / (SDIMCUTOFF * ZDIM));
+        s      = (int)((ipszc / ZDIM) % SDIMCUTOFF);
+        z      = (int)(ipszc % ZDIM);
+
+        ipsz = (phidec * SDIM_FOR_FALL_CALC * ZDIM) + (s * ZDIM) + z;
+
+        b->host.centXF[ipszc] = (float)driftcentXs[ipsz];
+        b->host.centYF[ipszc] = (float)driftcentYs[ipsz];
+        b->host.sigsqF[ipszc] = (float)sigma_square[ipsz];
+    }
+
+    for(int ipsc = 0; ipsc < SDIMCUTOFF * PHIDECDIM; ipsc++){
+        s = ipsc % SDIMCUTOFF;
+        phidec = ipsc / SDIMCUTOFF;
+
+        ips = phidec * SDIM_FOR_FALL_CALC + s;
+
+        b->host.massreleasedF[ipsc] = (float)massreleased[ips];
+    }
+}
+/* End of 4*/
+
+/* 5. Host Data Packing: Location Data */
+static void pack_location_data_buffers(
+    Buffers *b,
+    double *locX,
+    double *locY,
+    double *locZ
+){
+    for(int j = 0; j < LOCDIM; j++){
+        b->host.locXF[j] = (float)locX[j];
+        b->host.locYF[j] = (float)locY[j];
+        b->host.locZF[j] = (float)locZ[j];
+    }
+}
+/* End of 5 */
+
 /* 6. Copy Fixed Data to Device */
 static void copy_fixed_data_to_device_buffers(Buffers *b)
 {
@@ -886,7 +947,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
  	 * s      : source index along plume axis
  	 * z      : vertical layer index
 	 */
-	int phidec, s, z;
+	//int phidec, s, z;
 
 	/* ---- flattened indices -----------------------------------------
 	* Multi-dimensional indices (phidec, source, z) are mapped to
@@ -895,8 +956,8 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	* ipsz : index for (phidec, source, height_interval)
 	* ips  : index for (phidec, source)
 	*/
-	int ipsz;
-	int ips;
+	//int ipsz;
+	//int ips;
 
 	PSZC = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZC = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
 	LSP = (size_t)LOCDIM * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
@@ -934,32 +995,6 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	/* end of 2.*/
 
 	/* 3. Device Buffer Allocation */
-
-	/* ---- device arrays --------------------------------------------- */
-	/* GPU (device) memory buffers are grouped by their indexing scheme.
-	*
-	* PSZC arrays: indexed by (phidec, s, z)
-	*   centXD, centYD : centroid of a particle cloud (x, y)
-	*   sigsqD         : variance (sigma^2) of a particle cloud
-	*
-	* LSP arrays: indexed by (location, phidec, s)
-	*   lspmlD         : mass loading contribution at each location
-	*                    from each particle cloud
-	*
-	* Location arrays: indexed by location
-	*   locXD, locYD, locZD : coordinates of evaluation points
-	*   ttlmlD              : total mass loading at each location,
-	*            			  obtained by reduction of lspmlD over
-	*            			  grain-size subdivision (phidec) and source (s).
-	*						  ttlmlD is calculated in device (GPU)
-	*
-	* Source arrays:
-	*   sourceZD       : source heights along plume axis, indexed by s
-	*   massreleasedD  : released mass, indexed by (phidec, s)
-	*
-	* Here, a particle cloud means a group of particles of a given
-	* grain-size subdivision (phidec) released from a plume source (s).
-	*/
 	Buffers b;
 
 	b.PSZC = PSZC;
@@ -987,38 +1022,17 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	/* end of 3. */
 
 	/* 4. Host Data Packing: Fixed Data */
-
-	for(int i = 0; i < SDIMCUTOFF; i++){
-		sourceZF[i] = (float)sourceZ[i];
-	}
-
-	for(size_t ipszc = 0; ipszc < PSZC; ipszc++){
-		phidec = (int)(ipszc / (SDIMCUTOFF * ZDIM));
-		s      = (int)((ipszc / ZDIM) % SDIMCUTOFF);
-		z      = (int)(ipszc % ZDIM);
-		ipsz = (phidec * SDIM_FOR_FALL_CALC * ZDIM) + (s * ZDIM) + z;
-
-		centXF[ipszc] = (float)driftcentXs[ipsz];
-		centYF[ipszc] = (float)driftcentYs[ipsz];
-		sigsqF[ipszc] = (float)sigma_square[ipsz];
-
-		//printf("centx%1.4f\tcenty%1.4f\tsig%1.4f\n", centXF[ipszc], centYF[ipszc], sigsqF[ipszc]);
-	}
-
-	for(int ipsc = 0; ipsc < SDIMCUTOFF * PHIDECDIM; ipsc++){
-		s = ipsc % SDIMCUTOFF;
-		phidec = (ipsc / SDIMCUTOFF);
-		ips = phidec * SDIM_FOR_FALL_CALC + s;
-		massreleasedF[ipsc] = (float)massreleased[ips];
-	}
-	/* end of 4. */
+	pack_fixed_data_buffers(
+    &b,
+    sourceZ,
+    driftcentXs,
+    driftcentYs,
+    sigma_square,
+    massreleased
+	);
 
 	/* 5. Host Data Packing: Location Data */
-	for(int j = 0; j < LOCDIM; j++){
-		locXF[j] = (float)locX[j];
-		locYF[j] = (float)locY[j];
-		locZF[j] = (float)locZ[j];
-	}
+	pack_location_data_buffers(&b, locX, locY, locZ);
 	/* end of 5. */
 
 	/* 6. Copy Fixed Data to Device */

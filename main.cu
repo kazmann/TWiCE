@@ -910,7 +910,7 @@ static void cleanup_buffers(Buffers *b)
 }
 /* end of 10b */
 
-/* New function inserted on May 2, 2026*/
+/* New functions inserted on May 2, 2026*/
 static void prepare_mass_loading(
     Buffers *b,
     double *sourceZ,
@@ -945,7 +945,16 @@ static void prepare_mass_loading(
 
     /* fixed copy */
     copy_fixed_data_to_device_buffers(b);
-} //end of the new function
+}
+static void compute_mass_loading(
+    Buffers *b,
+    double *ttlml
+)
+{
+    copy_location_data_to_device_buffers(b);
+    launch_mass_loading_kernels_buffers(b);
+    copy_result_to_host_buffers(b, ttlml);
+}//end of the new functions
 
 
 
@@ -1037,11 +1046,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	b.PSZC = PSZC;
 	b.LSP  = LSP;
 
-	allocate_device_buffers_struct(&b);
-	
-	/* --- bridge: existing pointers → struct (no behavior change) --- */
-
-	/* host */
+	/* host bridge: required before prepare */
 	b.host.ttlmlF = ttlmlF;
 
 	b.host.sourceZF = sourceZF;
@@ -1054,25 +1059,18 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	b.host.locZF = locZF;
 
 	b.host.massreleasedF = massreleasedF;
-	/* end of 3. */
 
-	/* 4. Host Data Packing: Fixed Data */
-	pack_fixed_data_buffers(
-    &b,
-    sourceZ,
-    driftcentXs,
-    driftcentYs,
-    sigma_square,
-    massreleased
+	prepare_mass_loading(
+		&b,
+		sourceZ,
+		driftcentXs,
+		driftcentYs,
+		sigma_square,
+		massreleased,
+		locX,
+		locY,
+		locZ
 	);
-
-	/* 5. Host Data Packing: Location Data */
-	pack_location_data_buffers(&b, locX, locY, locZ);
-	/* end of 5. */
-
-	/* 6. Copy Fixed Data to Device */
-	copy_fixed_data_to_device_buffers(&b);
-	/* end of 6. */
 
 	/* 7. Copy Location Data to Device */
 	copy_location_data_to_device_buffers(&b);

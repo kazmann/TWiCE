@@ -910,6 +910,43 @@ static void cleanup_buffers(Buffers *b)
 }
 /* end of 10b */
 
+/* New function inserted on May 2, 2026*/
+static void prepare_mass_loading(
+    Buffers *b,
+    double *sourceZ,
+    double *driftcentXs,
+    double *driftcentYs,
+    double *sigma_square,
+    double *massreleased,
+    double *locX,
+    double *locY,
+    double *locZ
+){
+    /* device allocation */
+    allocate_device_buffers_struct(b);
+
+    /* fixed packing */
+    pack_fixed_data_buffers(
+        b,
+        sourceZ,
+        driftcentXs,
+        driftcentYs,
+        sigma_square,
+        massreleased
+    );
+
+    /* location packing */
+    pack_location_data_buffers(
+        b,
+        locX,
+        locY,
+        locZ
+    );
+
+    /* fixed copy */
+    copy_fixed_data_to_device_buffers(b);
+} //end of the new function
+
 
 
 // D01a and D01b FOR GPU PROCESSING

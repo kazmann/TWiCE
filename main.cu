@@ -946,6 +946,7 @@ static void prepare_mass_loading(
     /* fixed copy */
     copy_fixed_data_to_device_buffers(b);
 }
+
 static void compute_mass_loading(
     Buffers *b,
     double *ttlml
@@ -1071,22 +1072,9 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 		locY,
 		locZ
 	);
-
-	/* 7. Copy Location Data to Device */
-	copy_location_data_to_device_buffers(&b);
-	/* end of 7. */
-
-	/* 8. Kernel Launch */
-	launch_mass_loading_kernels_buffers(&b);
-	/* end of 8. */
-
-	/* 9. Copy Result to Host */
-	copy_result_to_host_buffers(&b, ttlml);
-	/* end of 9. */
-
-	/* 10. Cleanup */
+	compute_mass_loading(&b, ttlml);
 	cleanup_buffers(&b);
-	/* end of 10. */
+	/* end of host bridge */
 
 } // End of the function
 

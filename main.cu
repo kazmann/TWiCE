@@ -1040,8 +1040,6 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	allocate_device_buffers_struct(&b);
 	
 	/* --- bridge: existing pointers → struct (no behavior change) --- */
-	b.PSZC = PSZC;
-	b.LSP  = LSP;
 
 	/* host */
 	b.host.ttlmlF = ttlmlF;

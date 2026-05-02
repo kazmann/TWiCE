@@ -917,15 +917,9 @@ static void prepare_mass_loading(
     double *driftcentXs,
     double *driftcentYs,
     double *sigma_square,
-    double *massreleased,
-    double *locX,
-    double *locY,
-    double *locZ
-){
-    /* device allocation */
+    double *massreleased){
     allocate_device_buffers_struct(b);
 
-    /* fixed packing */
     pack_fixed_data_buffers(
         b,
         sourceZ,
@@ -935,23 +929,16 @@ static void prepare_mass_loading(
         massreleased
     );
 
-    /* location packing */
-    pack_location_data_buffers(
-        b,
-        locX,
-        locY,
-        locZ
-    );
-
-    /* fixed copy */
     copy_fixed_data_to_device_buffers(b);
 }
 
 static void compute_mass_loading(
     Buffers *b,
-    double *ttlml
-)
-{
+    double *locX,
+    double *locY,
+    double *locZ,
+    double *ttlml){
+    pack_location_data_buffers(b, locX, locY, locZ);
     copy_location_data_to_device_buffers(b);
     launch_mass_loading_kernels_buffers(b);
     copy_result_to_host_buffers(b, ttlml);
@@ -1067,12 +1054,9 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 		driftcentXs,
 		driftcentYs,
 		sigma_square,
-		massreleased,
-		locX,
-		locY,
-		locZ
+		massreleased
 	);
-	compute_mass_loading(&b, ttlml);
+	compute_mass_loading(&b, locX, locY, locZ, ttlml);
 	cleanup_buffers(&b);
 	/* end of host bridge */
 
@@ -1084,11 +1068,13 @@ __global__ void funcD01a(int N, int zdim, int sdim, int phidecdim, float zdelta,
 		
 		unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
 		if(tid < N){
+			lspmlD[tid] = 0.0f; 
+
 			j = tid / (phidecdim * sdim);
 			s = (tid / phidecdim) % sdim;
 			phidec = tid % phidecdim;
 			z = locZ[j] / zdelta;
-
+			
 			ipsz = (phidec * sdim * zdim) + (s * zdim) + z;
 			ips = s + phidec * sdim;
 

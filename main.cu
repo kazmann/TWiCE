@@ -88,21 +88,23 @@ double MINIMUM_CONTRIBUTION = -9999;	// Minimum contribution of particle segrega
 
 double Ht;
 
-double S_MAX= 100000;
-int SDIM_FOR_PLUME_CALC = -9999;
-int SDIM_FOR_FALL_CALC = -9999;
-int SDIMCUTOFF;
-double S_DELTA_FOR_PLUME_CALC = 10;
-double S_DELTA_FOR_FALL_CALC = 100;
-double Z_DELTA = 100;
-int ZDIM;   // number of h interval
+// Plume trajectory
+double S_MAX= 100000;					// Length of Plume
+int SDIM_FOR_PLUME_CALC = -9999;		// Number of segment along the plume for trajectory calculation
+int SDIM_FOR_FALL_CALC = -9999;			// Number of particle source along the plume
+int SDIMCUTOFF;							// Released mass below this threshold is treated as zero and not considered a source.
+double S_DELTA_FOR_PLUME_CALC = 10;		// Step size for Runge-Kutta calculation for plume trajectory
+double S_DELTA_FOR_FALL_CALC = 100;		// Length of a plume segment treated as a single source along the plume axis
+double Z_DELTA = 100;					// Vertical step size for fall calculation
+int ZDIM;   							// number of step (Z interval) for fall calculation
 
-int LOCDIM; // number of locations to calc
+// Locations of the ground
+int LOCDIM; 							// number of locations to calc
 
 
-// ORIGINALLY IN WINDY.C
+// Entrainment coefficient for plume calculation
 double ENTRAIN_COEFF_KS = 0.09;  // another k should be introduced for gas thurst region but uniform value in this code
-double ENTRAIN_COEFF_KW = 0.9;
+double ENTRAIN_COEFF_KW = 0.9;   // See Woodhouse et al. (2012) https://doi.org/10.1029/2012JB009592Digital Object Identifier (DOI)
 
 // MAP BOUNDARY
 double MAPENDE = -9999999;
@@ -110,6 +112,7 @@ double MAPENDW =  9999999;
 double MAPENDS =  9999999;
 double MAPENDN = -9999999;
 
+// LOCATION and MASSLOADING
 typedef struct {
 int j;
 double x;
@@ -122,24 +125,29 @@ double meandiameter;
 double dep[20]; // mass of each phi size class but for l2 dep[0] and dep[1] indicate area of isopach and its square root
 } DEP;	//locdatastruct or l[j]
 
-typedef struct {	// Total particle segregation during the eruption
-double phi;
-double theoretical;	// Deduced from particle distribution function
-double actual;		// Can be lower than theoretical because of S_MAX shortage especially for small particles
+// Total released particle mass for a phi interval
+typedef struct {
+    double phi;
+    double theoretical; // From particle size distribution function
+    double actual;      // May be lower due to S_MAX limitation,
+                        // especially for small particles
 } RELEASE;
 
-typedef struct {	// Amount of particle segrigation from an interval on the plume axis
-	double mass_from_ds[20]; //[] means number of size classes in phi scale
+// Particle mass for sub-phi intervals (e.g., 0.1 phi),
+// distributed along the plume axis
+typedef struct {
+    double mass_from_ds[20]; // Number of size classes in phi scale
 } SEG;
 
+//High altitude meteorology
 typedef struct {
   int day;
   int hour;
-  double wind_height; /* height a.s.l. in km */
-  double wind_speed; 	/* the average windspeed in m/s */
-  double wind_dir;  	/* average wind direction in +/- degrees from north */
-  double t_atm;
-  double p_atm;
+  double wind_height;	// height a.s.l. in km
+  double wind_speed;	// the average windspeed in m/s
+  double wind_dir;		// average wind direction in +/- degrees from north
+  double t_atm;	// atmospheric temperature
+  double p_atm;	// atmospheric pressure
 } WIND;
 static WIND *W1;
 
@@ -613,6 +621,18 @@ void drift_from_a_certain_source(double *source_x, double *source_y, double *sou
 	}
 } // End of the function (F20)
 
+static __host__ __device__ inline int
+idx_psz(int phidec, int s, int z, int sdim, int zdim)
+{
+    return phidec * sdim * zdim + s * zdim + z;
+}
+
+static __host__ __device__ inline int
+idx_ps(int phidec, int s, int sdim)
+{
+    return phidec * sdim + s;
+}
+
 #ifdef CUDA
 
 // Structures
@@ -723,7 +743,7 @@ static void pack_fixed_data_buffers(
         s      = (int)((ipszc / ZDIM) % SDIMCUTOFF);
         z      = (int)(ipszc % ZDIM);
 
-        ipsz = (phidec * SDIM_FOR_FALL_CALC * ZDIM) + (s * ZDIM) + z;
+		ipsz = idx_psz(phidec, s, z, SDIM_FOR_FALL_CALC, ZDIM);
 
         b->host.centXF[ipszc] = (float)driftcentXs[ipsz];
         b->host.centYF[ipszc] = (float)driftcentYs[ipsz];
@@ -734,7 +754,8 @@ static void pack_fixed_data_buffers(
         s = ipsc % SDIMCUTOFF;
         phidec = ipsc / SDIMCUTOFF;
 
-        ips = phidec * SDIM_FOR_FALL_CALC + s;
+        //ips = phidec * SDIM_FOR_FALL_CALC + s;
+		ips = idx_ps(phidec, s, SDIM_FOR_FALL_CALC);
 
         b->host.massreleasedF[ipsc] = (float)massreleased[ips];
     }
@@ -1078,49 +1099,174 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 
 } // End of the function
 
-__global__ void funcD01a(int N, int zdim, int sdim, int phidecdim, float zdelta, float *lspmlD, float *ttlmlD, float *sourceZD, float *centX, float *centY, float *sigma_square, float *locX, float *locY, float *locZ, float *massreleased){
-		int j, s, z, phidec, ips, ipsz;
-		float depcentX, depcentY, sigma2, square_distance;
-		
-		unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
-		if(tid < N){
-			lspmlD[tid] = 0.0f; 
+/**
+ * @brief Compute partial mass loading for each (location, source, phi) element (= lsmpl).
+ *
+ * Each CUDA thread computes one flattened element of:
+ *
+ *     lspmlD[location, source, phidec]
+ *
+ * Flattened layout:
+ *
+ *     tid = ((location * sdim) + source) * phidecdim + phidec
+ *
+ * @param N Total number of flattened elements:
+ *          locdim * sdim * phidecdim
+ * @param zdim Number of vertical grid intervals
+ * @param sdim Number of source points
+ * @param phidecdim Number of grain-size subdivisions
+ * @param zdelta Vertical grid spacing
+ * @param lspmlD Output partial mass loading per location/source/phi
+ * @param ttlmlD Output total mass loading buffer, used by funcD01b
+ * @param sourceZD Source height array
+ * @param centX Deposit center X array indexed by (phidec, source, z)
+ * @param centY Deposit center Y array indexed by (phidec, source, z)
+ * @param sigma_square Variance array indexed by (phidec, source, z)
+ * @param locX Location X array for the current chunk
+ * @param locY Location Y array for the current chunk
+ * @param locZ Location Z array for the current chunk
+ * @param massreleased Released mass indexed by (phidec, source)
+ */
+__global__ void funcD01a(
+    int N,
+    int zdim,
+    int sdim,
+    int phidecdim,
+    float zdelta,
+    float *lspmlD,
+    float *ttlmlD,
+    float *sourceZD,
+    float *centX,
+    float *centY,
+    float *sigma_square,
+    float *locX,
+    float *locY,
+    float *locZ,
+    float *massreleased
+){
+    int j, s, z, phidec, ips, ipsz;
+    float depcentX, depcentY, sigma2, square_distance;
 
-			j = tid / (phidecdim * sdim);
-			s = (tid / phidecdim) % sdim;
-			phidec = tid % phidecdim;
-			z = locZ[j] / zdelta;
-			
-			ipsz = (phidec * sdim * zdim) + (s * zdim) + z;
-			ips = s + phidec * sdim;
+    unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
 
-			depcentX = centX[ipsz+1] + (centX[ipsz] - centX[ipsz+1]) * (zdelta * (z + 1) - locZ[j]) / zdelta;
-			//printf("depcentX = %1.1f\n", centX[0]);
-			depcentY = centY[ipsz+1] + (centY[ipsz] - centY[ipsz+1]) * (zdelta * (z + 1) - locZ[j]) / zdelta;
-			sigma2 = sigma_square[ipsz+1] + (sigma_square[ipsz] - sigma_square[ipsz+1]) * (zdelta * (z + 1) - locZ[j]) / zdelta;
-			square_distance = pow((depcentX - locX[j]), 2) + pow((depcentY - locY[j]), 2);
+    if(tid < N){
+        lspmlD[tid] = 0.0f;
 
-			if(locZ[j] < sourceZD[s]){	//20241224
-				lspmlD[tid] = 1 / (M_2PI * sigma2) * exp(-square_distance / (2 * sigma2)) * massreleased[ips]; // Original formulation appears in Bonadonna+ (2005)
+        /*
+         * Decode flattened thread index.
+         *
+         * Layout:
+         *   tid = ((j * sdim) + s) * phidecdim + phidec
+         *
+         * j      : location index within the current chunk
+         * s      : source index
+         * phidec : grain-size subdivision index
+         */
+        j      = tid / (phidecdim * sdim);
+        s      = (tid / phidecdim) % sdim;
+        phidec = tid % phidecdim;
+
+        /*
+         * z is the vertical layer containing the current location.
+         * Arrays centX, centY, and sigma_square are interpolated
+         * between z and z+1.
+         */
+        z = locZ[j] / zdelta;
+
+        /*
+         * ipsz indexes arrays flattened from:
+         *   [phidec][source][z]
+         *
+         * ips indexes arrays flattened from:
+         *   [phidec][source]
+         */
+		 
+		ipsz = idx_psz(phidec, s, z, sdim, zdim);
+		ips = idx_ps(phidec, s, sdim);
+
+        depcentX =
+            centX[ipsz + 1]
+            + (centX[ipsz] - centX[ipsz + 1])
+            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+
+        depcentY =
+            centY[ipsz + 1]
+            + (centY[ipsz] - centY[ipsz + 1])
+            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+
+        sigma2 =
+            sigma_square[ipsz + 1]
+            + (sigma_square[ipsz] - sigma_square[ipsz + 1])
+            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+
+        square_distance =
+            pow((depcentX - locX[j]), 2)
+            + pow((depcentY - locY[j]), 2);
+
+        /*
+         * Only sources above the current location contribute
+         * to mass loading at that location.
+         */
+        if(locZ[j] < sourceZD[s]){
+            /* Original formulation: Bonadonna et al. (2005) */
+            lspmlD[tid] =
+                1 / (M_2PI * sigma2)
+                * exp(-square_distance / (2 * sigma2))
+                * massreleased[ips];
+
 #ifdef TEPHRA2
-				lspmlD[tid] = 1 / (M_PI * sigma2) * exp(-square_distance / (sigma2)) * massreleased[ips];    // Formulation used in Tephra2 and WT
+            /* Formulation used in Tephra2 and WT */
+            lspmlD[tid] =
+                1 / (M_PI * sigma2)
+                * exp(-square_distance / sigma2)
+                * massreleased[ips];
 #endif
-			//printf("%d\t%d\t%1.4e\t%1.4e\t%1.4e\n", s, phidec, massreleased[ips], lspmlD[tid], depcentX); //see also Line535
-			}
-			tid += blockDim.x * gridDim.x;
-		}
+        }
+
+        /*
+         * Note:
+         * This increment has no effect unless this if-block is changed
+         * to a while-loop. It is kept here to avoid changing behavior.
+         */
+        tid += blockDim.x * gridDim.x;
+    }
 }
 
 
-__global__ void funcD01b(int N, int locdim, float *lspmlD, float *ttlmlD){
-	unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
+/**
+ * @brief Reduce partial mass loading over source and phi for each location.
+ *
+ * funcD01a produces:
+ *
+ *     lspmlD[location, source, phidec]
+ *
+ * This kernel sums all source/phi contributions for each location:
+ *
+ *     ttlmlD[location] = sum over source and phidec
+ *
+ * @param N Total number of flattened lspmlD elements:
+ *          locdim * sdim * phidecdim
+ * @param locdim Number of locations in the current chunk
+ * @param lspmlD Partial mass loading array
+ * @param ttlmlD Output total mass loading per location
+ */
+__global__ void funcD01b(
+    int N,
+    int locdim,
+    float *lspmlD,
+    float *ttlmlD
+){
+    unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
 
-	if(tid < locdim){
-		ttlmlD[tid] = 0.0;
-		for(int i = 0; i < (N / locdim); i++){
-			ttlmlD[tid] += lspmlD[tid * (N / locdim) + i];
-		}
-	}
+    if(tid < locdim){
+        int n_per_location = N / locdim;
+
+        ttlmlD[tid] = 0.0f;
+
+        for(int i = 0; i < n_per_location; i++){
+            ttlmlD[tid] += lspmlD[tid * n_per_location + i];
+        }
+    }
 }
 
 // D01b
@@ -1158,8 +1304,10 @@ void calc_mass_loading_element(int phisize, double *sourceZ, double *driftcentXs
 		phidec = idx % PHIDECDIM;
 
 		z = (int)(locZ[j] / Z_DELTA);
-		ipsz = (phidec * SDIM_FOR_FALL_CALC * ZDIM) + (s * ZDIM) + z;
-		ips = s + phidec * SDIM_FOR_FALL_CALC;
+		ipsz = idx_psz(phidec, s, z, SDIM_FOR_FALL_CALC, ZDIM);
+		//ips = s + phidec * SDIM_FOR_FALL_CALC;
+
+		ips = idx_ps(phidec, s, SDIM_FOR_FALL_CALC);
 
 		if(locZ[j] < sourceZ[s]){
 			depcentX = driftcentXs[ipsz+1] + (driftcentXs[ipsz] - driftcentXs[ipsz+1]) * (Z_DELTA * (z + 1) - locZ[j]) / Z_DELTA;
@@ -2228,11 +2376,11 @@ double windy(int imax, double *sourceX, double *sourceY, double *sourceZ, double
 			U = INITIAL_PLUME_VELOCITY;
 			R = VENT_RADIUS;
 		}else if(MAGMA_DISCHARGE_RATE > 0 && INITIAL_PLUME_VELOCITY < 0 && VENT_RADIUS > 0){
-			Q = MAGMA_DISCHARGE_RATE / M_PI;	// mass flux is defined as pi * Q in Woodhouse et al. (2013)
+			Q = MAGMA_DISCHARGE_RATE / M_PI;	// mass flux is defined as pi * Q in Woodhouse et al. (2012)
 			U = Q / (rho_c * VENT_RADIUS * VENT_RADIUS);
 			R = VENT_RADIUS;
 		}else if(MAGMA_DISCHARGE_RATE > 0 && INITIAL_PLUME_VELOCITY > 0 && VENT_RADIUS < 0){
-			Q = MAGMA_DISCHARGE_RATE / M_PI;	// mass flux is defined as pi * Q in Woodhouse et al. (2013)
+			Q = MAGMA_DISCHARGE_RATE / M_PI;	// mass flux is defined as pi * Q in Woodhouse et al. (2012)
 			U = INITIAL_PLUME_VELOCITY;
 			R = sqrt(Q / (rho_c * INITIAL_PLUME_VELOCITY));
 		}else{

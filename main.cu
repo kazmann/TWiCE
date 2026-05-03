@@ -746,9 +746,11 @@ static void pack_location_data_buffers(
     Buffers *b,
     double *locX,
     double *locY,
-    double *locZ
+    double *locZ,
+    int loc0,
+    int locN
 ){
-    for(int j = 0; j < LOCDIM; j++){
+    for(int j = 0; j < locN; j++){
         b->host.locXF[j] = (float)locX[j];
         b->host.locYF[j] = (float)locY[j];
         b->host.locZF[j] = (float)locZ[j];
@@ -797,40 +799,44 @@ static void copy_fixed_data_to_device_buffers(Buffers *b)
 /* end of 6 */
 
 /* 7. Copy Location Data to Device */
-static void copy_location_data_to_device_buffers(Buffers *b)
+static void copy_location_data_to_device_buffers(Buffers *b, int locN)
 {
     CUDA_CHECK(cudaMemcpy(
         b->device.locXD,
         b->host.locXF,
-        LOCDIM * sizeof(float),
+        locN * sizeof(float),
         cudaMemcpyHostToDevice
     ));
 
     CUDA_CHECK(cudaMemcpy(
         b->device.locYD,
         b->host.locYF,
-        LOCDIM * sizeof(float),
+        locN * sizeof(float),
         cudaMemcpyHostToDevice
     ));
 
     CUDA_CHECK(cudaMemcpy(
         b->device.locZD,
         b->host.locZF,
-        LOCDIM * sizeof(float),
+        locN * sizeof(float),
         cudaMemcpyHostToDevice
     ));
 }
 /* end of #7*/
 
-/* 8. Kernel Launch */
-static void launch_mass_loading_kernels_buffers(Buffers *b)
+static void launch_mass_loading_kernels_buffers(
+    Buffers *b,
+    int locN
+)
 {
-    if (b->LSP > INT_MAX) {
-        fprintf(stderr, "Error: LSP too large: %zu\n", b->LSP);
+    size_t LSP_chunk = (size_t)locN * SDIMCUTOFF * PHIDECDIM;
+
+    if (LSP_chunk > INT_MAX) {
+        fprintf(stderr, "Error: LSP_chunk too large: %zu\n", LSP_chunk);
         exit(EXIT_FAILURE);
     }
 
-    int N = (int)b->LSP;
+    int N = (int)LSP_chunk;
 
     int blocksize = 128;
     dim3 block(blocksize, 1, 1);
@@ -851,11 +857,11 @@ static void launch_mass_loading_kernels_buffers(Buffers *b)
     );
     CUDA_KERNEL_CHECK();
 
-    dim3 grid2((LOCDIM + block.x - 1) / block.x, 1, 1);
+    dim3 grid2((locN + block.x - 1) / block.x, 1, 1);
 
     funcD01b<<<grid2, block>>>(
         N,
-        LOCDIM,
+        locN,
         b->device.lspmlD,
         b->device.ttlmlD
     );
@@ -863,10 +869,9 @@ static void launch_mass_loading_kernels_buffers(Buffers *b)
 
     CUDA_CHECK(cudaDeviceSynchronize());
 }
-/* end of #8*/
 
 /* 9. Copy Result to Host */
-static void copy_result_to_host_buffers(Buffers *b, double *ttlml)
+static void copy_result_to_host_buffers(Buffers *b, double *ttlml, int loc0, int locN)
 {
     CUDA_CHECK(cudaMemcpy(
         b->host.ttlmlF,
@@ -875,8 +880,8 @@ static void copy_result_to_host_buffers(Buffers *b, double *ttlml)
         cudaMemcpyDeviceToHost
     ));
 
-    for(int i = 0; i < LOCDIM; i++){
-        ttlml[i] = b->host.ttlmlF[i];
+    for(int j = 0; j < locN; j++){
+        ttlml[loc0 + j] = (double)b->host.ttlmlF[j];
     }
 }
 /* end of #9 */
@@ -937,14 +942,15 @@ static void compute_mass_loading(
     double *locX,
     double *locY,
     double *locZ,
-    double *ttlml){
-    pack_location_data_buffers(b, locX, locY, locZ);
-    copy_location_data_to_device_buffers(b);
-    launch_mass_loading_kernels_buffers(b);
-    copy_result_to_host_buffers(b, ttlml);
-}//end of the new functions
-
-
+    double *ttlml,
+    int loc0,
+    int locN
+){
+    pack_location_data_buffers(b, locX, locY, locZ, loc0, locN);
+    copy_location_data_to_device_buffers(b, locN);
+    launch_mass_loading_kernels_buffers(b, locN);
+    copy_result_to_host_buffers(b, ttlml, loc0, locN);
+}
 
 // D01a and D01b FOR GPU PROCESSING
 // Calculate mass loading of a certain grain size on a certain point on the ground (Sloc) from a certain source: Sloc(phi, s)
@@ -1056,7 +1062,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 		sigma_square,
 		massreleased
 	);
-	compute_mass_loading(&b, locX, locY, locZ, ttlml);
+	compute_mass_loading(&b, locX, locY, locZ, ttlml, 0, LOCDIM);
 	cleanup_buffers(&b);
 	/* end of host bridge */
 

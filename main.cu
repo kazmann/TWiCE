@@ -751,9 +751,9 @@ static void pack_location_data_buffers(
     int locN
 ){
     for(int j = 0; j < locN; j++){
-        b->host.locXF[j] = (float)locX[j];
-        b->host.locYF[j] = (float)locY[j];
-        b->host.locZF[j] = (float)locZ[j];
+        b->host.locXF[j] = (float)locX[loc0 + j];
+        b->host.locYF[j] = (float)locY[loc0 + j];
+        b->host.locZF[j] = (float)locZ[loc0 + j];
     }
 }
 /* End of 5 */
@@ -876,7 +876,7 @@ static void copy_result_to_host_buffers(Buffers *b, double *ttlml, int loc0, int
     CUDA_CHECK(cudaMemcpy(
         b->host.ttlmlF,
         b->device.ttlmlD,
-        LOCDIM * sizeof(float),
+        locN * sizeof(float),
         cudaMemcpyDeviceToHost
     ));
 
@@ -1062,8 +1062,18 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 		sigma_square,
 		massreleased
 	);
-	compute_mass_loading(&b, locX, locY, locZ, ttlml, 0, LOCDIM);
-	cleanup_buffers(&b);
+	int chunk_locdim = 1; //LOCDIM - 1;
+	/* Loop for compute mass loading */
+	for (int loc0 = 0; loc0 < LOCDIM; loc0 += chunk_locdim) {
+
+		int locN = chunk_locdim;
+		if (loc0 + locN > LOCDIM) {
+			locN = LOCDIM - loc0;
+		}
+
+		compute_mass_loading(&b, locX, locY, locZ, ttlml, loc0, locN);
+	}
+		cleanup_buffers(&b);
 	/* end of host bridge */
 
 } // End of the function

@@ -838,7 +838,7 @@ static void launch_mass_loading_kernels_buffers(
 
     int N = (int)LSP_chunk;
 
-    int blocksize = 128;
+    int blocksize = 128; /* conventional CUDA block size */
     dim3 block(blocksize, 1, 1);
     dim3 grid((N + block.x - 1) / block.x, 1, 1);
 
@@ -1062,7 +1062,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 		sigma_square,
 		massreleased
 	);
-	int chunk_locdim = 1; //LOCDIM - 1;
+	int chunk_locdim = 8192;  // Empirically tuned on NVIDIA GeForce RTX 3060; output verified by diff
 	/* Loop for compute mass loading */
 	for (int loc0 = 0; loc0 < LOCDIM; loc0 += chunk_locdim) {
 

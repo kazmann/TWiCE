@@ -451,6 +451,28 @@ void allocate_work_arrays(
     *r = (RELEASE *)calloc(MIN_GRAINSIZE - MAX_GRAINSIZE, sizeof(RELEASE));
 }
 
+void initialize_simulation_state(
+    DEP *locdatastruct,
+    double *locX,
+    double *locY,
+    double *locZ,
+    double *ttlmassloading,
+    double *cummassphi,
+    RELEASE *r,
+    SEG *massreleased_per_ds
+){
+    /*
+     * Initialize simulation state before the phi loop.
+     */
+
+    locwrite(locdatastruct, locX, locY, locZ);
+
+    clearary(LOCDIM, ttlmassloading);
+    clearary(LOCDIM, cummassphi);
+
+    obtaintheoreticallyreleased(r);
+}
+
 int main(int argc, char *argv[]) {
 	/* read config file */
 	char string[30];
@@ -536,7 +558,25 @@ int main(int argc, char *argv[]) {
 	//
 	int phisize;  // phi number of the fraction 
 	double grainsize, phi;
-	//double released_mass_of_fraction = 0.0;
+
+	/*
+	* Allocate working arrays for the simulation.
+	*
+	* These arrays are used across multiple stages of the computation:
+	* - fall time and drift calculations
+	* - per-grainsize summaries
+	* - per-source (s) distributions
+	* - mass loading at ground locations
+	*
+	* All arrays are allocated here to centralize memory management
+	* and make the data dependencies of the main computation explicit.
+	*
+	* Note:
+	* The sizes depend on global dimensions such as ZDIM, PHIDECDIM,
+	* SDIM_FOR_FALL_CALC, and LOCDIM.
+	*/
+
+	// TODO: These arrays can be grouped into a SimulationWorkspace struct
 
 	double *ttlfalltime, *driftX, *driftY;
 	double *ttlfalltimesummary, *ttldriftXsummary, *ttldriftYsummary;
@@ -559,11 +599,14 @@ int main(int argc, char *argv[]) {
 		&locdatastruct, &r
 	);
 
-	locwrite(locdatastruct, locX, locY, locZ);
-	obtaintheoreticallyreleased(r);
-
-	clearary(LOCDIM, ttlmassloading);
-	clearary(LOCDIM, cummassphi);
+	initialize_simulation_state(
+		locdatastruct,
+		locX, locY, locZ,
+		ttlmassloading,
+		cummassphi,
+		r,
+		massreleased_per_ds
+	);
 
 	for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
 		for(int phidecimal = 0; phidecimal < PHIDECDIM; phidecimal++){
@@ -595,7 +638,7 @@ int main(int argc, char *argv[]) {
 			/* Calculate particle segregation from each plume interval */
 			mass_release_calc(zmax, phidecimal, phi, h, atmP, atmT, windX, windY, massreleased_per_ds_and_phidec);
 		}// END OF DECIMAL PHI LOOP
-		//released_mass_of_fraction = confirm_released_mass(massreleased_per_ds_and_phidec);
+		
 		drift_from_a_certain_source(sourceX, sourceY, sourceZ, sourceRadius, ttlfalltimephidec, ttldriftXphidec, ttldriftYphidec, driftX_s, driftY_s, sigma_square);
 		writetrajectory(phiint, driftX_s, driftY_s, sigma_square, massreleased_per_ds_and_phidec, massreleased_per_ds);  // mass released for 1phi interval is also calculated from 0.1 phi interval data
 		get_sdimcutoff(sigma_square, massreleased_per_ds, phiint);	// obtain SDIMCUTOFF

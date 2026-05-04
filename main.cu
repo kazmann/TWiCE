@@ -112,7 +112,18 @@ double MAPENDW =  9999999;
 double MAPENDS =  9999999;
 double MAPENDN = -9999999;
 
-// LOCATION and MASSLOADING
+/*
+ * DEP: data structure for each ground location
+ *
+ * j                  : index of location
+ * x, y, z            : coordinates [m]
+ * dist               : distance from vent [m]
+ * ttlmassloading     : total mass loading at this location [kg/m^2]
+ * smallerthan1mm     : mass fraction of particles smaller than 1 mm
+ * meandiameter       : mean grain size at this location
+ * dep[phi]           : mass loading per phi class
+ *                      (special use in some modes: area of isopach, etc.)
+ */
 typedef struct {
 int j;
 double x;
@@ -123,7 +134,7 @@ double ttlmassloading;
 double smallerthan1mm;
 double meandiameter;
 double dep[20]; // mass of each phi size class but for l2 dep[0] and dep[1] indicate area of isopach and its square root
-} DEP;	//locdatastruct or l[j]
+} DEP;	//location_properties or l[j]
 
 // Total released particle mass for a phi interval
 typedef struct {
@@ -161,7 +172,7 @@ void printsegregation_per_ds(SEG *r);
 void printxyz(FILE *in, const char *type, int i, double *srcX, double *srcY, double *srcZ);
 void printxyzq(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q, double *t);
 void printxyze(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q);
-void printfallsummary(const char *c, double *h, double *ttlfalltimesummary, double base, int stepnumber, double stepdelta); // modified on 2024.07.28
+void printfallsummary(const char *c, double *h, double *ttlfalltime_phiint, double base, int stepnumber, double stepdelta); // modified on 2024.07.28
 void printsegsummary(const char *c, double *massreleased_per_ds_and_phidec, double base, int stepnumber, double stepdelta);
 
 
@@ -175,7 +186,7 @@ void get_sdimcutoff(double *cloud_sigma2, SEG *massreleased_per_ds_and_phidec, i
 
 void atmosphere(int windlinenum, double *h, double *atmT, double *atmP, double *windX, double *windY, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres);
 void interval_fall_calc(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime);
-void writettlfallsummary(int phiint, double *ttlfalltime, double *ttlfalltimesummary);
+void writettlfallsummary(int phiint, double *ttlfalltime, double *ttlfalltime_phiint);
 void drift_from_a_certain_source(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2);
 void writetrajectory(int phiint, double *cloud_center_x, double *cloud_center_y, double *sigma_squre, double *massreleased, SEG *seg);
 double calc_cloud_sigma2(double source_radius, double falltime);
@@ -184,7 +195,7 @@ double confirm_released_mass(double *massreleased);
 void locwrite(DEP *l, double *locX, double *locY, double *locZ);
 void depwrite(int size, DEP *l, double *massloading);
 void sumwrite(DEP *l, double *ttlmassloading, double *cummassphi);
-void printdeposit(DEP *locdatastruct);
+void printdeposit(DEP *location_properties);
 void clearary(int dim, double *ary);
 int compare_ttlmassloading(const void *a, const void *b);
 int compare_Md(const void * a, const void * b);
@@ -279,12 +290,12 @@ void build_atmosphere_tables(int windlinenum, double Ht,
                              int *zmax);
 
 void allocate_work_arrays(double **ttlfalltime, double **driftX, double **driftY,
-                          double **ttlfalltimesummary,
-                          double **ttldriftXsummary,
-                          double **ttldriftYsummary,
-                          double **ttlfalltimephidec,
-                          double **ttldriftXphidec,
-                          double **ttldriftYphidec,
+                          double **ttlfalltime_phiint,
+                          double **ttldriftX_phiint,
+                          double **ttldriftY_phiint,
+                          double **ttlfalltime_phidec,
+                          double **ttldriftX_phidec,
+                          double **ttldriftY_phidec,
                           double **massreleased_per_ds_and_phidec,
                           SEG **massreleased_per_ds,
                           double **cloud_center_x, double **cloud_center_y,
@@ -292,10 +303,10 @@ void allocate_work_arrays(double **ttlfalltime, double **driftX, double **driftY
                           double **tmpmassloading,
                           double **ttlmassloading,
                           double **cummassphi,
-                          DEP **locdatastruct,
+                          DEP **location_properties,
                           RELEASE **r);
 
-void initialize_simulation_state(DEP *locdatastruct,
+void initialize_simulation_state(DEP *location_properties,
                                  double *locX, double *locY, double *locZ,
                                  double *ttlmassloading,
                                  double *cummassphi,
@@ -311,12 +322,12 @@ void calculate_massloading(int zmax,
                            double *ttlfalltime,
                            double *driftX,
                            double *driftY,
-                           double *ttlfalltimesummary,
-                           double *ttldriftXsummary,
-                           double *ttldriftYsummary,
-                           double *ttlfalltimephidec,
-                           double *ttldriftXphidec,
-                           double *ttldriftYphidec,
+                           double *ttlfalltime_phiint,
+                           double *ttldriftX_phiint,
+                           double *ttldriftY_phiint,
+                           double *ttlfalltime_phidec,
+                           double *ttldriftX_phidec,
+                           double *ttldriftY_phidec,
                            double *massreleased_per_ds_and_phidec,
                            SEG *massreleased_per_ds,
                            double *cloud_center_x,
@@ -325,7 +336,7 @@ void calculate_massloading(int zmax,
                            double *tmpmassloading,
                            double *ttlmassloading,
                            double *cummassphi,
-                           DEP *locdatastruct,
+                           DEP *location_properties,
                            RELEASE *r);
 
 void free_all(double *wind_alt, double *wind_v, double *wind_dir,
@@ -339,12 +350,12 @@ void free_all(double *wind_alt, double *wind_v, double *wind_dir,
               double *h, double *atmT, double *atmP,
               double *windX, double *windY,
               double *ttlfalltime, double *driftX, double *driftY,
-              double *ttlfalltimesummary,
-              double *ttldriftXsummary,
-              double *ttldriftYsummary,
-              double *ttlfalltimephidec,
-              double *ttldriftXphidec,
-              double *ttldriftYphidec,
+              double *ttlfalltime_phiint,
+              double *ttldriftX_phiint,
+              double *ttldriftY_phiint,
+              double *ttlfalltime_phidec,
+              double *ttldriftX_phidec,
+              double *ttldriftY_phidec,
               double *massreleased_per_ds_and_phidec,
               SEG *massreleased_per_ds,
               double *cloud_center_x, double *cloud_center_y,
@@ -352,7 +363,7 @@ void free_all(double *wind_alt, double *wind_v, double *wind_dir,
               double *tmpmassloading,
               double *ttlmassloading,
               double *cummassphi,
-              DEP *locdatastruct,
+              DEP *location_properties,
               RELEASE *r);
 
 
@@ -466,18 +477,18 @@ int main(int argc, char *argv[]) {
 	double *ttlfalltime, *driftX, *driftY;
 
 	// summary of fall time and drift for each integer phi class
-	// ttlfalltimesummary[phi][z] : elapsed time for particles of integer phi to reach height z [s]
-	// ttldriftXsummary[phi][z]   : horizontal drift distance in X-direction for integer phi [m]
-	// ttldriftYsummary[phi][z]   : horizontal drift distance in Y-direction for integer phi [m]
+	// ttlfalltime_phiint[phi][z] : elapsed time for particles of integer phi to reach height z [s]
+	// ttldriftX_phiint[phi][z]   : horizontal drift distance in X-direction for integer phi [m]
+	// ttldriftY_phiint[phi][z]   : horizontal drift distance in Y-direction for integer phi [m]
 	// dimensions: (number of integer phi classes) × ZDIM
-	double *ttlfalltimesummary, *ttldriftXsummary, *ttldriftYsummary;
+	double *ttlfalltime_phiint, *ttldriftX_phiint, *ttldriftY_phiint;
 
 	// fall time and drift for each decimal phi (phidec) class
-	// ttlfalltimephidec[phidec][z] : elapsed time to reach height z [s]
-	// ttldriftXphidec[phidec][z]   : horizontal drift distance in X-direction [m]
-	// ttldriftYphidec[phidec][z]   : horizontal drift distance in Y-direction [m]
+	// ttlfalltime_phidec[phidec][z] : elapsed time to reach height z [s]
+	// ttldriftX_phidec[phidec][z]   : horizontal drift distance in X-direction [m]
+	// ttldriftY_phidec[phidec][z]   : horizontal drift distance in Y-direction [m]
 	// dimensions: PHIDECDIM × ZDIM
-	double *ttlfalltimephidec, *ttldriftXphidec, *ttldriftYphidec;
+	double *ttlfalltime_phidec, *ttldriftX_phidec, *ttldriftY_phidec;
 
 	
 	double *massreleased_per_ds_and_phidec;
@@ -490,23 +501,23 @@ int main(int argc, char *argv[]) {
 
 
 	double *tmpmassloading, *ttlmassloading, *cummassphi;
-	DEP *locdatastruct;
+	DEP *location_properties;
 	RELEASE *r;
 
 	allocate_work_arrays(
 		&ttlfalltime, &driftX, &driftY,
-		&ttlfalltimesummary, &ttldriftXsummary, &ttldriftYsummary,
-		&ttlfalltimephidec, &ttldriftXphidec, &ttldriftYphidec,
+		&ttlfalltime_phiint, &ttldriftX_phiint, &ttldriftY_phiint,
+		&ttlfalltime_phidec, &ttldriftX_phidec, &ttldriftY_phidec,
 		&massreleased_per_ds_and_phidec,
 		&massreleased_per_ds,
 		&cloud_center_x, &cloud_center_y, &cloud_sigma2,
 		&tmpmassloading, &ttlmassloading, &cummassphi,
-		&locdatastruct, &r
+		&location_properties, &r
 	);
 
 	/* 5. INITIALIZATION*/
 	initialize_simulation_state(
-		locdatastruct,
+		location_properties,
 		locX, locY, locZ,
 		ttlmassloading,
 		cummassphi,
@@ -523,12 +534,12 @@ int main(int argc, char *argv[]) {
 		ttlfalltime,
 		driftX,
 		driftY,
-		ttlfalltimesummary,
-		ttldriftXsummary,
-		ttldriftYsummary,
-		ttlfalltimephidec,
-		ttldriftXphidec,
-		ttldriftYphidec,
+		ttlfalltime_phiint,
+		ttldriftX_phiint,
+		ttldriftY_phiint,
+		ttlfalltime_phidec,
+		ttldriftX_phidec,
+		ttldriftY_phidec,
 		massreleased_per_ds_and_phidec,
 		massreleased_per_ds,
 		cloud_center_x,
@@ -537,7 +548,7 @@ int main(int argc, char *argv[]) {
 		tmpmassloading,
 		ttlmassloading,
 		cummassphi,
-		locdatastruct,
+		location_properties,
 		r
 	);
 
@@ -545,19 +556,19 @@ int main(int argc, char *argv[]) {
 	/* 7.1. falltime and drift */
 	if(WRITE_FALL_INFO_FILES){	// DEFINED IN CONFIG FILE
 	const char *name1 = "falltime.txt";
-	printfallsummary(name1, h, ttlfalltimesummary, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
+	printfallsummary(name1, h, ttlfalltime_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
 	const char *name2 = "falldriftX.txt";
-	printfallsummary(name2, h, ttldriftXsummary, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
+	printfallsummary(name2, h, ttldriftX_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
 	const char *name3 = "falldriftY.txt";
-	printfallsummary(name3, h, ttldriftYsummary, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
+	printfallsummary(name3, h, ttldriftY_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
 	printparticlereleased(r);			//particle_released.txt
 	printsegregation_per_ds(massreleased_per_ds); //segregation_per_ds.txt
 	}
 
 	/* 7.2. massloading and isopach */
-	sumwrite(locdatastruct, ttlmassloading, cummassphi);	//calculate mean diameter for each location
-	if(WRITE_MASSLOADING){printdeposit(locdatastruct);		//massloading.txt
-	createisopachdata(locdatastruct);}						//S_vs_Area.txt
+	sumwrite(location_properties, ttlmassloading, cummassphi);	//calculate mean diameter for each location
+	if(WRITE_MASSLOADING){printdeposit(location_properties);		//massloading.txt
+	createisopachdata(location_properties);}						//S_vs_Area.txt
 	
 	/* 8. CLEAN UP */
 	free_all(
@@ -567,12 +578,12 @@ int main(int argc, char *argv[]) {
 		sourceX, sourceY, sourceZ, sourceRadius, sourceT,
 		h, atmT, atmP, windX, windY,
 		ttlfalltime, driftX, driftY,
-		ttlfalltimesummary, ttldriftXsummary, ttldriftYsummary,
-		ttlfalltimephidec, ttldriftXphidec, ttldriftYphidec,
+		ttlfalltime_phiint, ttldriftX_phiint, ttldriftY_phiint,
+		ttlfalltime_phidec, ttldriftX_phidec, ttldriftY_phidec,
 		massreleased_per_ds_and_phidec, massreleased_per_ds,
 		cloud_center_x, cloud_center_y, cloud_sigma2,
 		tmpmassloading, ttlmassloading, cummassphi,
-		locdatastruct, r
+		location_properties, r
 	);
 
 	return 0;
@@ -593,6 +604,13 @@ void read_wind_file(
     *windlinenum = get_wind_line_number(in_wind);
     rewind(in_wind);
 
+	// allocate arrays to store input atmospheric (wind) data (argv[2])
+	// wind_alt[i]  : altitude [m]
+	// wind_v[i]    : wind speed [m/s]
+	// wind_dir[i]  : wind direction [deg]
+	// wind_tmp[i]  : temperature [K]
+	// wind_pres[i] : pressure [Pa]
+	// dimension: windlinenum (number of input data points)
     *wind_alt  = (double *)malloc(*windlinenum * sizeof(double));
     *wind_v    = (double *)malloc(*windlinenum * sizeof(double));
     *wind_dir  = (double *)malloc(*windlinenum * sizeof(double));
@@ -625,6 +643,17 @@ void read_loc_file(
     fclose(in_loc);
 }
 
+/*
+ * Write plume trajectory and particle source positions to files.
+ *
+ * plumetraj.txt:
+ *   Centerline of the plume obtained by solving the plume differential equations.
+ *   Each entry corresponds to a point along the plume axis.
+ *
+ * plumesourceposition.txt:
+ *   Discrete particle release points distributed along the plume axis.
+ *   These serve as sources of particle emission for the fall calculation.
+ */
 void write_plume_files(
     int WRITE_COLUMN_FILES,
     int SDIM_FOR_PLUME_CALC,
@@ -659,6 +688,22 @@ void write_plume_files(
     }
 }
 
+/*
+ * Build atmospheric and wind profiles on the vertical grid used in the simulation.
+ *
+ * Input atmospheric data are interpolated onto height levels used by the code.
+ * The grid is regular with spacing Z_DELTA except for the top level,
+ * where h[zmax] is explicitly set to the plume height Ht.
+ *
+ * Inputs: wind_v, wind_dir, wind_tmp, wind_pres from argv[2]
+ *
+ * Outputs:
+ * - h[z]     : height level [m]
+ * - atmT[z]  : atmospheric temperature [K]
+ * - atmP[z]  : atmospheric pressure [Pa]
+ * - windX[z] : wind velocity in X-direction [m/s]
+ * - windY[z] : wind velocity in Y-direction [m/s]
+ */
 void build_atmosphere_tables(
     int windlinenum,
     double Ht,
@@ -673,27 +718,62 @@ void build_atmosphere_tables(
     double **windY,
     int *zmax
 ){
+	// define vertical grid
+	// z = 0      : sea level
+	// z = zmax-1 : highest regular grid level below Ht
+	// z = zmax   : plume height Ht
+	//
+	// h[0 ... zmax-1] are regular grid points with spacing Z_DELTA.
+	// h[zmax] is explicitly set to Ht.
     *zmax = ceil(Ht / Z_DELTA);
     ZDIM = *zmax + 1;
 
+	// allocate arrays for interpolated atmospheric and wind profiles
+	// defined on a uniform vertical grid with spacing Z_DELTA
+	//
+	// h[z]     : height grid [m]
+	// atmT[z]  : temperature profile [K]
+	// atmP[z]  : pressure profile [Pa]
+	// windX[z] : wind velocity in X-direction [m/s]
+	// windY[z] : wind velocity in Y-direction [m/s]
+	//
+	// dimension: ZDIM (number of vertical grid points)
     *h     = (double *)malloc(ZDIM * sizeof(double));
     *atmT  = (double *)malloc(ZDIM * sizeof(double));
     *atmP  = (double *)malloc(ZDIM * sizeof(double));
     *windX = (double *)malloc(ZDIM * sizeof(double));
     *windY = (double *)malloc(ZDIM * sizeof(double));
 
-    for(int z = 0; z < *zmax; z++){
+    for(int z = 0; z < *zmax; z++){	// uniform vertical grid with spacing Z_DELTA
         (*h)[z] = z * Z_DELTA;
     }
-    (*h)[*zmax] = Ht;
+    (*h)[*zmax] = Ht;	// set the top grid level to the exact plume height Ht
 
+	// interpolate input atmospheric data onto the vertical grid
     atmosphere(
         windlinenum,
-        *h, *atmT, *atmP, *windX, *windY,
-        wind_v, wind_dir, wind_tmp, wind_pres
+        *h, *atmT, *atmP, *windX, *windY,		// interpolated data
+        wind_v, wind_dir, wind_tmp, wind_pres	// input data (argv[2])
     );
 }
 
+
+/*
+ * Compute plume trajectory and define particle source points along it.
+ *
+ * First, solve the plume trajectory using input atmospheric data and store
+ * the plume centerline coordinates, radius, and travel time.
+ * Then, place discrete particle source points along the plume axis for
+ * the fall and mass-loading calculations.
+ *
+ * Outputs:
+ * - plume_trajX/Y/Z : plume centerline coordinates [m]
+ * - plume_trajR     : plume radius [m]
+ * - plume_trajT     : elapsed time from vent along plume axis [s]
+ * - sourceX/Y/Z     : particle source coordinates [m]
+ * - sourceRadius    : plume radius at each source point [m]
+ * - sourceT         : elapsed time from vent to each source point [s]
+ */
 void build_plume_and_sources(
     int windlinenum,
     double *wind_alt,
@@ -712,13 +792,14 @@ void build_plume_and_sources(
     double **sourceRadius,
     double **sourceT
 ){
-    // plume trajectory
+    // allocate arrays for plume trajectory
     *plume_trajX = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
     *plume_trajY = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
     *plume_trajZ = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
     *plume_trajR = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
     *plume_trajT = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
 
+	// compute plume centerline
     Ht = plume_calculation(
         windlinenum,
         *plume_trajX, *plume_trajY, *plume_trajZ,
@@ -726,29 +807,48 @@ void build_plume_and_sources(
         wind_alt, wind_v, wind_dir, wind_tmp, wind_pres
     );
 
-    // source
+    // allocate arrays for particle source points
     *sourceX = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
     *sourceY = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
     *sourceZ = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
     *sourceRadius = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
     *sourceT = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
 
+	// interpolate source points along plume trajectory
     create_source_array(
         *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT,
         *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT
     );
 }
 
+/*
+ * Allocate working arrays used in the main mass-loading calculation.
+ *
+ * These arrays store temporary fall/drift profiles, per-phi summaries,
+ * particle release distributions, cloud-center positions, cloud dispersion,
+ * and accumulated deposit information at ground locations.
+ *
+ * Main array dimensions:
+ * - ZDIM                                  : vertical grid
+ * - PHIDECDIM                             : decimal phi classes
+ * - SDIM_FOR_FALL_CALC                    : source points along plume axis
+ * - LOCDIM                                : ground locations
+ * - MIN_GRAINSIZE - MAX_GRAINSIZE         : integer phi classes
+ *
+ * Note:
+ * Arrays are allocated here only. Their physical meanings are documented
+ * at their declarations in main() and in the functions where they are used.
+ */
 void allocate_work_arrays(
     double **ttlfalltime,
     double **driftX,
     double **driftY,
-    double **ttlfalltimesummary,
-    double **ttldriftXsummary,
-    double **ttldriftYsummary,
-    double **ttlfalltimephidec,
-    double **ttldriftXphidec,
-    double **ttldriftYphidec,
+    double **ttlfalltime_phiint,
+    double **ttldriftX_phiint,
+    double **ttldriftY_phiint,
+    double **ttlfalltime_phidec,
+    double **ttldriftX_phidec,
+    double **ttldriftY_phidec,
     double **massreleased_per_ds_and_phidec,
     SEG **massreleased_per_ds,
     double **cloud_center_x,
@@ -757,38 +857,44 @@ void allocate_work_arrays(
     double **tmpmassloading,
     double **ttlmassloading,
     double **cummassphi,
-    DEP **locdatastruct,
+    DEP **location_properties,
     RELEASE **r
 ){
+	// temporary fall-time and drift profiles
+		// particle data, temporaly storage
     *ttlfalltime = (double*)calloc(ZDIM, sizeof(double));
     *driftX      = (double*)calloc(ZDIM, sizeof(double));
     *driftY      = (double*)calloc(ZDIM, sizeof(double));
+		// particle data during fall for integer phi classes
+    *ttlfalltime_phiint = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
+    *ttldriftX_phiint   = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
+    *ttldriftY_phiint   = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
+		// particle data during fall for integer decunak phi classes
+    *ttlfalltime_phidec = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
+    *ttldriftX_phidec   = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
+    *ttldriftY_phidec   = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
 
-    *ttlfalltimesummary = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
-    *ttldriftXsummary   = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
-    *ttldriftYsummary   = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
-
-    *ttlfalltimephidec = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
-    *ttldriftXphidec   = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
-    *ttldriftYphidec   = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
-
+	// particle release distributions along plume axis
     *massreleased_per_ds_and_phidec = (double*)calloc(SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
     *massreleased_per_ds = (SEG*)calloc(SDIM_FOR_FALL_CALC, sizeof(SEG));
 
+	// cloud center positions and horizontal dispersion
     *cloud_center_x = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
     *cloud_center_y = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
     *cloud_sigma2 = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
 
+	// mass loading and deposit accumulation at ground locations
     *tmpmassloading = (double*)calloc(LOCDIM, sizeof(double));
     *ttlmassloading = (double*)calloc(LOCDIM, sizeof(double));
     *cummassphi     = (double*)calloc(LOCDIM, sizeof(double));
 
-    *locdatastruct = (DEP *)calloc(LOCDIM, sizeof(DEP));
+	// output data structures
+    *location_properties = (DEP *)calloc(LOCDIM, sizeof(DEP));
     *r = (RELEASE *)calloc(MIN_GRAINSIZE - MAX_GRAINSIZE, sizeof(RELEASE));
 }
 
 void initialize_simulation_state(
-    DEP *locdatastruct,
+    DEP *location_properties,
     double *locX,
     double *locY,
     double *locZ,
@@ -797,11 +903,7 @@ void initialize_simulation_state(
     RELEASE *r,
     SEG *massreleased_per_ds
 ){
-    /*
-     * Initialize simulation state before the phi loop.
-     */
-
-    locwrite(locdatastruct, locX, locY, locZ);
+    locwrite(location_properties, locX, locY, locZ);
 
     clearary(LOCDIM, ttlmassloading);
     clearary(LOCDIM, cummassphi);
@@ -835,12 +937,12 @@ void calculate_massloading(
     double *ttlfalltime,
     double *driftX,
     double *driftY,
-    double *ttlfalltimesummary,
-    double *ttldriftXsummary,
-    double *ttldriftYsummary,
-    double *ttlfalltimephidec,
-    double *ttldriftXphidec,
-    double *ttldriftYphidec,
+    double *ttlfalltime_phiint,
+    double *ttldriftX_phiint,
+    double *ttldriftY_phiint,
+    double *ttlfalltime_phidec,
+    double *ttldriftX_phidec,
+    double *ttldriftY_phidec,
     double *massreleased_per_ds_and_phidec,
     SEG *massreleased_per_ds,
     double *cloud_center_x,
@@ -849,7 +951,7 @@ void calculate_massloading(
     double *tmpmassloading,
     double *ttlmassloading,
     double *cummassphi,
-    DEP *locdatastruct,
+    DEP *location_properties,
     RELEASE *r
 ){
     /*
@@ -876,13 +978,27 @@ void calculate_massloading(
 			//printf("INTERVAL_DECIMAL_PHI=%1.1f\tPHIDECDIM = %d\tphi = %1.1f\n", INTERVAL_DECIMAL_PHI, PHIDECDIM, phi);
 			grainsize = pow(2, -phi) * 0.001;	// grain size in mm
 
-			/* F10 Calculate drift center and falltime for each height interval */
+			/*
+			* interval_fall_calc (F10)
+			*
+			* Compute fall time and horizontal drift for a given grain size.
+			*
+			* Inputs:
+			*   zmax, phidecimal, grainsize
+			*   h, atmP, atmT, windX, windY
+			*
+			* Outputs (written in-place):
+			*   driftX[z]      : horizontal drift in X-direction [m]
+			*   driftY[z]      : horizontal drift in Y-direction [m]
+			*   ttlfalltime[z] : elapsed fall time to height z [s]
+			*/
 			interval_fall_calc(zmax, phidecimal, grainsize, h, atmP, atmT, windX, windY, driftX, driftY, ttlfalltime);
 			
-			//	20240728 store 0.1 phi interval fallout
-			writettlfallsummary(phidecimal, ttlfalltime, ttlfalltimephidec); // 20240728
-			writettlfallsummary(phidecimal, driftX, ttldriftXphidec); // 20240728
-			writettlfallsummary(phidecimal, driftY, ttldriftYphidec); // 20240728
+			// Summarize and store fall time, drift X, and drift Y for each 0.1-phi size bin
+			// Map ttlfalltime[z] and driftXY[z] to ttlfalltime_phidec[z, phidec] and ttldriftXYphidec[z, phidec]
+			writettlfallsummary(phidecimal, ttlfalltime, ttlfalltime_phidec);
+			writettlfallsummary(phidecimal, driftX, ttldriftX_phidec);
+			writettlfallsummary(phidecimal, driftY, ttldriftY_phidec);
 			
 			/*printf("grainsize = %1.4e m\n", grainsize);
 			for(int t = 0; t < ZDIM; t++){
@@ -892,25 +1008,25 @@ void calculate_massloading(
 			
 			// output 1 phi interval fallout
 			if(phidecimal == 0){
-				writettlfallsummary(phiint, ttlfalltime, ttlfalltimesummary);
-				writettlfallsummary(phiint, driftX, ttldriftXsummary);
-				writettlfallsummary(phiint, driftY, ttldriftYsummary);
+				writettlfallsummary(phiint, ttlfalltime, ttlfalltime_phiint);
+				writettlfallsummary(phiint, driftX, ttldriftX_phiint);
+				writettlfallsummary(phiint, driftY, ttldriftY_phiint);
 			}
 			/* Calculate particle segregation from each plume interval */
 			mass_release_calc(zmax, phidecimal, phi, h, atmP, atmT, windX, windY, massreleased_per_ds_and_phidec);
 		}// END OF DECIMAL PHI LOOP
 		
-		drift_from_a_certain_source(sourceX, sourceY, sourceZ, sourceRadius, ttlfalltimephidec, ttldriftXphidec, ttldriftYphidec, cloud_center_x, cloud_center_y, cloud_sigma2);
+		drift_from_a_certain_source(sourceX, sourceY, sourceZ, sourceRadius, ttlfalltime_phidec, ttldriftX_phidec, ttldriftY_phidec, cloud_center_x, cloud_center_y, cloud_sigma2);
 		writetrajectory(phiint, cloud_center_x, cloud_center_y, cloud_sigma2, massreleased_per_ds_and_phidec, massreleased_per_ds);  // mass released for 1phi interval is also calculated from 0.1 phi interval data
 		get_sdimcutoff(cloud_sigma2, massreleased_per_ds, phiint);	// obtain SDIMCUTOFF
 		
 		if(WRITE_DECIMAL_FALL_TRAJ){// 20240728 output 0.1 phi interval fallout to each 1 phi interval file
 			sprintf(string, "decimal_falltime_%1.0f.txt", phiint + MAX_GRAINSIZE + 1);
-			printfallsummary(string, h, ttlfalltimephidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
+			printfallsummary(string, h, ttlfalltime_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
 			sprintf(string, "decimal_falldriftX_%1.0f.txt", phiint + MAX_GRAINSIZE + 1);
-			printfallsummary(string, h, ttldriftXphidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
+			printfallsummary(string, h, ttldriftX_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
 			sprintf(string, "decimal_falldriftY_%1.0f.txt", phiint + MAX_GRAINSIZE + 1);
-			printfallsummary(string, h, ttldriftYphidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);	
+			printfallsummary(string, h, ttldriftY_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);	
 		}  // 20240728 END
 		
 		if(WRITE_FALL_INFO_FILES){
@@ -942,11 +1058,11 @@ void calculate_massloading(
 #ifdef TEST
 			printlspml(phiint, lspml);
 #endif
-			if(WRITE_DECIMAL_MASSLOADING){printS4eachphidec(locdatastruct, phiint, lspml);}
+			if(WRITE_DECIMAL_MASSLOADING){printS4eachphidec(location_properties, phiint, lspml);}
 			free(lspml);
 		}
 		
-		depwrite(phiint, locdatastruct, tmpmassloading);
+		depwrite(phiint, location_properties, tmpmassloading);
 		clearary(LOCDIM, tmpmassloading);
 		
 	}// END OF INTEGER PHI LOOP
@@ -979,12 +1095,12 @@ void free_all(
     double *ttlfalltime,
     double *driftX,
     double *driftY,
-    double *ttlfalltimesummary,
-    double *ttldriftXsummary,
-    double *ttldriftYsummary,
-    double *ttlfalltimephidec,
-    double *ttldriftXphidec,
-    double *ttldriftYphidec,
+    double *ttlfalltime_phiint,
+    double *ttldriftX_phiint,
+    double *ttldriftY_phiint,
+    double *ttlfalltime_phidec,
+    double *ttldriftX_phidec,
+    double *ttldriftY_phidec,
     double *massreleased_per_ds_and_phidec,
     SEG *massreleased_per_ds,
     double *cloud_center_x,
@@ -993,7 +1109,7 @@ void free_all(
     double *tmpmassloading,
     double *ttlmassloading,
     double *cummassphi,
-    DEP *locdatastruct,
+    DEP *location_properties,
     RELEASE *r
 ){
     /*
@@ -1034,13 +1150,13 @@ void free_all(
     free(driftX);
     free(driftY);
 
-    free(ttlfalltimesummary);
-    free(ttldriftXsummary);
-    free(ttldriftYsummary);
+    free(ttlfalltime_phiint);
+    free(ttldriftX_phiint);
+    free(ttldriftY_phiint);
 
-    free(ttlfalltimephidec);
-    free(ttldriftXphidec);
-    free(ttldriftYphidec);
+    free(ttlfalltime_phidec);
+    free(ttldriftX_phidec);
+    free(ttldriftY_phidec);
 
     free(massreleased_per_ds_and_phidec);
     free(massreleased_per_ds);
@@ -1053,7 +1169,7 @@ void free_all(
     free(ttlmassloading);
     free(cummassphi);
 
-    free(locdatastruct);
+    free(location_properties);
     free(r);
 }
 
@@ -1082,13 +1198,13 @@ void create_source_array(double *sourceX, double *sourceY, double *sourceZ, doub
 	}
 }
 
-void writettlfallsummary(int phiint, double *ttlfalltime, double *ttlfalltimesummary){
+void writettlfallsummary(int phiint, double *ttlfalltime, double *ttlfalltime_phiint){
 	for(int z = 0; z < ZDIM; z++){
-		ttlfalltimesummary[z + phiint * ZDIM] = ttlfalltime[z];
+		ttlfalltime_phiint[z + phiint * ZDIM] = ttlfalltime[z];
 	}
 }
 
-void printfallsummary(const char *c, double *h, double *ttlfalltimesummary, double base, int stepnum, double stepdelta){
+void printfallsummary(const char *c, double *h, double *ttlfalltime_phiint, double base, int stepnum, double stepdelta){
 	FILE *outfile;
 	outfile = fopen(c, "w");
 
@@ -1100,7 +1216,7 @@ void printfallsummary(const char *c, double *h, double *ttlfalltimesummary, doub
 	for(int z = ZDIM - 1; z >= 0; z--){
 		fprintf(outfile, "%d\t%1.1f", z, h[z]);
 		for(int phiint = 0; phiint < stepnum; phiint++){
-			fprintf(outfile, "\t%1.4f", ttlfalltimesummary[z + phiint * ZDIM]);
+			fprintf(outfile, "\t%1.4f", ttlfalltime_phiint[z + phiint * ZDIM]);
 		}
 		fprintf(outfile, "\n");
 	}
@@ -1982,38 +2098,38 @@ void mass_release_calc(int zmax, int phidecimal, double phi, double *h, double *
 	}
 }
 
-void locwrite(DEP *mll, double *locX, double *locY, double *locZ){
+void locwrite(DEP *location_properties, double *locX, double *locY, double *locZ){
   for(int j = 0; j < LOCDIM ; j++){
-    mll[j].x = locX[j];
-		mll[j].y = locY[j];
-		mll[j].z = locZ[j];
-		mll[j].dist = sqrt(pow(locX[j], 2) + pow(locY[j], 2));
+    location_properties[j].x = locX[j];
+		location_properties[j].y = locY[j];
+		location_properties[j].z = locZ[j];
+		location_properties[j].dist = sqrt(pow(locX[j], 2) + pow(locY[j], 2));
   }
 }
 
-void depwrite(int size, DEP *mll, double *loading){
+void depwrite(int size, DEP *location_properties, double *loading){
 	int phi;
 	phi = size + MAX_GRAINSIZE + 1;
 	
 	for(int j = 0; j < LOCDIM; j++){
-		mll[j].dep[size] = loading[j];
-		if(phi > 0){mll[j].smallerthan1mm += loading[j];}	
+		location_properties[j].dep[size] = loading[j];
+		if(phi > 0){location_properties[j].smallerthan1mm += loading[j];}	
 	}
 }
 
 
-void sumwrite(DEP *mll, double *ttlmassloading, double *cummassphi){
+void sumwrite(DEP *location_properties, double *ttlmassloading, double *cummassphi){
 	for(int j = 0; j < LOCDIM; j++){
-		mll[j].ttlmassloading = ttlmassloading[j];
+		location_properties[j].ttlmassloading = ttlmassloading[j];
 		if(ttlmassloading[j] > 0){
-			mll[j].meandiameter = cummassphi[j] / ttlmassloading[j];
+			location_properties[j].meandiameter = cummassphi[j] / ttlmassloading[j];
 		}else{
-			mll[j].meandiameter = -9999;
+			location_properties[j].meandiameter = -9999;
 		}
 	}
 }
 
-void printdeposit(DEP *mll){
+void printdeposit(DEP *location_properties){
 	FILE *outfile;
 	outfile = fopen("massloading.txt", "w");
 
@@ -2027,10 +2143,10 @@ void printdeposit(DEP *mll){
 
 	/*write data*/
 	for(int j = 0; j < LOCDIM; j++){
-		fprintf(outfile, "%1.0f\t%1.0f\t%1.0f\t%1.1f", mll[j].x + VENT_EASTING, mll[j].y + VENT_NORTHING, mll[j].z, mll[j].dist);
-		fprintf(outfile, "\t%1.4e\t%1.4f\t%1.4f", mll[j].ttlmassloading, mll[j].smallerthan1mm/mll[j].ttlmassloading*100, mll[j].meandiameter);
+		fprintf(outfile, "%1.0f\t%1.0f\t%1.0f\t%1.1f", location_properties[j].x + VENT_EASTING, location_properties[j].y + VENT_NORTHING, location_properties[j].z, location_properties[j].dist);
+		fprintf(outfile, "\t%1.4e\t%1.4f\t%1.4f", location_properties[j].ttlmassloading, location_properties[j].smallerthan1mm/location_properties[j].ttlmassloading*100, location_properties[j].meandiameter);
 		for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
-			fprintf(outfile, "\t%1.4e", mll[j].dep[phiint]);
+			fprintf(outfile, "\t%1.4e", location_properties[j].dep[phiint]);
 		}
 		fprintf(outfile, "\n");
 	}

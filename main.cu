@@ -197,7 +197,7 @@ double calc_dir(double x, double y);
 
 void obtaintheoreticallyreleased(RELEASE *r);
 
-//External in windy.c
+
 void read_wind(FILE *f, double *h, double *v, double *d, double *t, double *p);
 void read_loc(FILE *f, double *x, double *y, double *z);
 
@@ -242,6 +242,314 @@ double calc_particle_terminal_velocity(double h, double ashdiam, double part_den
 void phigenerator();
 void phiconvert();
 double calc_pdf_fraction(double phi);
+
+/* Functions for main structure */
+void read_wind_file(const char *filename, int *windlinenum,
+                    double **wind_alt, double **wind_v, double **wind_dir,
+                    double **wind_tmp, double **wind_pres);
+
+void read_loc_file(const char *filename, int *locdim,
+                   double **locX, double **locY, double **locZ);
+
+void build_plume_and_sources(int windlinenum,
+                             double *wind_alt, double *wind_v, double *wind_dir,
+                             double *wind_tmp, double *wind_pres,
+                             double **plume_trajX, double **plume_trajY,
+                             double **plume_trajZ, double **plume_trajR,
+                             double **plume_trajT,
+                             double **sourceX, double **sourceY,
+                             double **sourceZ, double **sourceRadius,
+                             double **sourceT);
+
+void write_plume_files(int write_column_files,
+                       int sdim_for_plume_calc,
+                       int sdim_for_fall_calc,
+                       double *plume_trajX, double *plume_trajY,
+                       double *plume_trajZ, double *plume_trajR,
+                       double *plume_trajT,
+                       double *sourceX, double *sourceY,
+                       double *sourceZ, double *sourceRadius,
+                       double *sourceT);
+
+void build_atmosphere_tables(int windlinenum, double Ht,
+                             double *wind_v, double *wind_dir,
+                             double *wind_tmp, double *wind_pres,
+                             double **h, double **atmT, double **atmP,
+                             double **windX, double **windY,
+                             int *zmax);
+
+void allocate_work_arrays(double **ttlfalltime, double **driftX, double **driftY,
+                          double **ttlfalltimesummary,
+                          double **ttldriftXsummary,
+                          double **ttldriftYsummary,
+                          double **ttlfalltimephidec,
+                          double **ttldriftXphidec,
+                          double **ttldriftYphidec,
+                          double **massreleased_per_ds_and_phidec,
+                          SEG **massreleased_per_ds,
+                          double **driftX_s, double **driftY_s,
+                          double **sigma_square,
+                          double **tmpmassloading,
+                          double **ttlmassloading,
+                          double **cummassphi,
+                          DEP **locdatastruct,
+                          RELEASE **r);
+
+void initialize_simulation_state(DEP *locdatastruct,
+                                 double *locX, double *locY, double *locZ,
+                                 double *ttlmassloading,
+                                 double *cummassphi,
+                                 RELEASE *r,
+                                 SEG *massreleased_per_ds);
+
+void calculate_massloading(int zmax,
+                           double *h, double *atmP, double *atmT,
+                           double *windX, double *windY,
+                           double *locX, double *locY, double *locZ,
+                           double *sourceX, double *sourceY,
+                           double *sourceZ, double *sourceRadius,
+                           double *ttlfalltime,
+                           double *driftX,
+                           double *driftY,
+                           double *ttlfalltimesummary,
+                           double *ttldriftXsummary,
+                           double *ttldriftYsummary,
+                           double *ttlfalltimephidec,
+                           double *ttldriftXphidec,
+                           double *ttldriftYphidec,
+                           double *massreleased_per_ds_and_phidec,
+                           SEG *massreleased_per_ds,
+                           double *driftX_s,
+                           double *driftY_s,
+                           double *sigma_square,
+                           double *tmpmassloading,
+                           double *ttlmassloading,
+                           double *cummassphi,
+                           DEP *locdatastruct,
+                           RELEASE *r);
+
+void free_all(double *wind_alt, double *wind_v, double *wind_dir,
+              double *wind_tmp, double *wind_pres,
+              double *locX, double *locY, double *locZ,
+              double *plume_trajX, double *plume_trajY,
+              double *plume_trajZ, double *plume_trajR,
+              double *plume_trajT,
+              double *sourceX, double *sourceY, double *sourceZ,
+              double *sourceRadius, double *sourceT,
+              double *h, double *atmT, double *atmP,
+              double *windX, double *windY,
+              double *ttlfalltime, double *driftX, double *driftY,
+              double *ttlfalltimesummary,
+              double *ttldriftXsummary,
+              double *ttldriftYsummary,
+              double *ttlfalltimephidec,
+              double *ttldriftXphidec,
+              double *ttldriftYphidec,
+              double *massreleased_per_ds_and_phidec,
+              SEG *massreleased_per_ds,
+              double *driftX_s, double *driftY_s,
+              double *sigma_square,
+              double *tmpmassloading,
+              double *ttlmassloading,
+              double *cummassphi,
+              DEP *locdatastruct,
+              RELEASE *r);
+
+
+
+
+
+
+
+int main(int argc, char *argv[]) {
+	/* 1. INPUT */
+	/* 1.1. read config file */
+	init_globals(argv[1]);		// to set WRITE_CONF which shows parameter in conf before run
+
+	/* 1.1.1. set calculate grain size range*/
+	PHIDECDIM = (int)(1 / INTERVAL_DECIMAL_PHI);
+	phiconvert();   // make max and minimum grain sizes ordered
+
+	/* 1.2. read wind (atmospheric) file */
+	int windlinenum = 0;
+	double *wind_alt, *wind_v, *wind_dir, *wind_tmp, *wind_pres;
+	read_wind_file(
+		argv[2],
+		&windlinenum,
+		&wind_alt,
+		&wind_v,
+		&wind_dir,
+		&wind_tmp,
+		&wind_pres
+	);
+
+	/* 1.3. read loc file */
+	double *locX, *locY, *locZ;
+	read_loc_file(
+		argv[3],
+		&LOCDIM,
+		&locX,
+		&locY,
+		&locZ
+	);
+
+	/* 2. PLUME and SOURCE SETUP */
+	/* 2.1. Set plume intervals for plume calculation and source distribution */
+	SDIM_FOR_PLUME_CALC = (S_MAX + S_DELTA_FOR_PLUME_CALC - 1) / S_DELTA_FOR_PLUME_CALC; // dimension of plume calculation; calculated plume should be longer than source plume
+	SDIM_FOR_FALL_CALC = S_MAX / S_DELTA_FOR_FALL_CALC; // dimension of source
+	SDIMCUTOFF = SDIM_FOR_FALL_CALC;
+
+	/* 2.2. Obtain plume trajectory and set particle sources on it */
+	double *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT;
+	double *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT;
+	build_plume_and_sources(
+		windlinenum,
+		wind_alt, wind_v, wind_dir, wind_tmp, wind_pres,
+		&plume_trajX, &plume_trajY, &plume_trajZ, &plume_trajR, &plume_trajT,
+		&sourceX, &sourceY, &sourceZ, &sourceRadius, &sourceT
+	);
+	
+	/* 2.3. Write original trajectory file */
+	write_plume_files(
+		WRITE_COLUMN_FILES,
+		SDIM_FOR_PLUME_CALC,
+		SDIM_FOR_FALL_CALC,
+		plume_trajX, plume_trajY, plume_trajZ, plume_trajR, plume_trajT,
+		sourceX, sourceY, sourceZ, sourceRadius, sourceT
+	);
+
+	/* 3. Atmosphere and wind field (table preparation) */
+	double *h, *atmT, *atmP, *windX, *windY;
+	int zmax;
+	build_atmosphere_tables(
+		windlinenum,
+		Ht,
+		wind_v,
+		wind_dir,
+		wind_tmp,
+		wind_pres,
+		&h,
+		&atmT,
+		&atmP,
+		&windX,
+		&windY,
+		&zmax
+	);
+
+	/*
+	* 4. ALLOCATE WORKING ARRAYS FOR THE SIMULATION
+	*
+	* These arrays are used across multiple stages of the computation:
+	* - fall time and drift calculations
+	* - per-grainsize summaries
+	* - per-source (s) distributions
+	* - mass loading at ground locations
+	*
+	* All arrays are allocated here to centralize memory management
+	* and make the data dependencies of the main computation explicit.
+	*
+	* Note:
+	* The sizes depend on global dimensions such as ZDIM, PHIDECDIM,
+	* SDIM_FOR_FALL_CALC, and LOCDIM.
+	*/
+
+	// TODO: These arrays can be grouped into a SimulationWorkspace struct
+
+	double *ttlfalltime, *driftX, *driftY;
+	double *ttlfalltimesummary, *ttldriftXsummary, *ttldriftYsummary;
+	double *ttlfalltimephidec, *ttldriftXphidec, *ttldriftYphidec;
+	double *massreleased_per_ds_and_phidec;
+	SEG *massreleased_per_ds;
+	double *driftX_s, *driftY_s, *sigma_square;
+	double *tmpmassloading, *ttlmassloading, *cummassphi;
+	DEP *locdatastruct;
+	RELEASE *r;
+
+	allocate_work_arrays(
+		&ttlfalltime, &driftX, &driftY,
+		&ttlfalltimesummary, &ttldriftXsummary, &ttldriftYsummary,
+		&ttlfalltimephidec, &ttldriftXphidec, &ttldriftYphidec,
+		&massreleased_per_ds_and_phidec,
+		&massreleased_per_ds,
+		&driftX_s, &driftY_s, &sigma_square,
+		&tmpmassloading, &ttlmassloading, &cummassphi,
+		&locdatastruct, &r
+	);
+
+	/* 5. INITIALIZATION*/
+	initialize_simulation_state(
+		locdatastruct,
+		locX, locY, locZ,
+		ttlmassloading,
+		cummassphi,
+		r,
+		massreleased_per_ds
+	);
+
+	/* 6. MAIN COMPUTATION */
+	calculate_massloading(
+		zmax,
+		h, atmP, atmT, windX, windY,
+		locX, locY, locZ,
+		sourceX, sourceY, sourceZ, sourceRadius,
+		ttlfalltime,
+		driftX,
+		driftY,
+		ttlfalltimesummary,
+		ttldriftXsummary,
+		ttldriftYsummary,
+		ttlfalltimephidec,
+		ttldriftXphidec,
+		ttldriftYphidec,
+		massreleased_per_ds_and_phidec,
+		massreleased_per_ds,
+		driftX_s,
+		driftY_s,
+		sigma_square,
+		tmpmassloading,
+		ttlmassloading,
+		cummassphi,
+		locdatastruct,
+		r
+	);
+
+	/* 7. OUTPUT */
+	/* 7.1. falltime and drift */
+	if(WRITE_FALL_INFO_FILES){	// DEFINED IN CONFIG FILE
+	const char *name1 = "falltime.txt";
+	printfallsummary(name1, h, ttlfalltimesummary, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
+	const char *name2 = "falldriftX.txt";
+	printfallsummary(name2, h, ttldriftXsummary, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
+	const char *name3 = "falldriftY.txt";
+	printfallsummary(name3, h, ttldriftYsummary, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
+	printparticlereleased(r);			//particle_released.txt
+	printsegregation_per_ds(massreleased_per_ds); //segregation_per_ds.txt
+	}
+
+	/* 7.2. massloading and isopach */
+	sumwrite(locdatastruct, ttlmassloading, cummassphi);	//calculate mean diameter for each location
+	if(WRITE_MASSLOADING){printdeposit(locdatastruct);		//massloading.txt
+	createisopachdata(locdatastruct);}						//S_vs_Area.txt
+	
+	/* 8. CLEAN UP */
+	free_all(
+		wind_alt, wind_v, wind_dir, wind_tmp, wind_pres,
+		locX, locY, locZ,
+		plume_trajX, plume_trajY, plume_trajZ, plume_trajR, plume_trajT,
+		sourceX, sourceY, sourceZ, sourceRadius, sourceT,
+		h, atmT, atmP, windX, windY,
+		ttlfalltime, driftX, driftY,
+		ttlfalltimesummary, ttldriftXsummary, ttldriftYsummary,
+		ttlfalltimephidec, ttldriftXphidec, ttldriftYphidec,
+		massreleased_per_ds_and_phidec, massreleased_per_ds,
+		driftX_s, driftY_s, sigma_square,
+		tmpmassloading, ttlmassloading, cummassphi,
+		locdatastruct, r
+	);
+
+	return 0;
+
+}	// End of main 
 
 void read_wind_file(
     const char *filename,
@@ -721,193 +1029,6 @@ void free_all(
     free(r);
 }
 
-int main(int argc, char *argv[]) {
-	/* 1. INPUT */
-	/* 1.1. read config file */
-	init_globals(argv[1]);		// to set WRITE_CONF which shows parameter in conf before run
-
-	/* 1.1.1. set calculate grain size range*/
-	PHIDECDIM = (int)(1 / INTERVAL_DECIMAL_PHI);
-	phiconvert();   // make max and minimum grain sizes ordered
-
-	/* 1.2. read wind (atmospheric) file */
-	int windlinenum = 0;
-	double *wind_alt, *wind_v, *wind_dir, *wind_tmp, *wind_pres;
-	read_wind_file(
-		argv[2],
-		&windlinenum,
-		&wind_alt,
-		&wind_v,
-		&wind_dir,
-		&wind_tmp,
-		&wind_pres
-	);
-
-	/* 1.3. read loc file */
-	double *locX, *locY, *locZ;
-	read_loc_file(
-		argv[3],
-		&LOCDIM,
-		&locX,
-		&locY,
-		&locZ
-	);
-
-	/* 2. PLUME and SOURCE SETUP */
-	/* 2.1. Set plume intervals for plume calculation and source distribution */
-	SDIM_FOR_PLUME_CALC = (S_MAX + S_DELTA_FOR_PLUME_CALC - 1) / S_DELTA_FOR_PLUME_CALC; // dimension of plume calculation; calculated plume should be longer than source plume
-	SDIM_FOR_FALL_CALC = S_MAX / S_DELTA_FOR_FALL_CALC; // dimension of source
-	SDIMCUTOFF = SDIM_FOR_FALL_CALC;
-
-	/* 2.2. Obtain plume trajectory and set particle sources on it */
-	double *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT;
-	double *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT;
-	build_plume_and_sources(
-		windlinenum,
-		wind_alt, wind_v, wind_dir, wind_tmp, wind_pres,
-		&plume_trajX, &plume_trajY, &plume_trajZ, &plume_trajR, &plume_trajT,
-		&sourceX, &sourceY, &sourceZ, &sourceRadius, &sourceT
-	);
-	
-	/* 2.3. Write original trajectory file */
-	write_plume_files(
-		WRITE_COLUMN_FILES,
-		SDIM_FOR_PLUME_CALC,
-		SDIM_FOR_FALL_CALC,
-		plume_trajX, plume_trajY, plume_trajZ, plume_trajR, plume_trajT,
-		sourceX, sourceY, sourceZ, sourceRadius, sourceT
-	);
-
-	/* 3. Atmosphere and wind field (table preparation) */
-	double *h, *atmT, *atmP, *windX, *windY;
-	int zmax;
-	build_atmosphere_tables(
-		windlinenum,
-		Ht,
-		wind_v,
-		wind_dir,
-		wind_tmp,
-		wind_pres,
-		&h,
-		&atmT,
-		&atmP,
-		&windX,
-		&windY,
-		&zmax
-	);
-
-	/*
-	* 4. ALLOCATE WORKING ARRAYS FOR THE SIMULATION
-	*
-	* These arrays are used across multiple stages of the computation:
-	* - fall time and drift calculations
-	* - per-grainsize summaries
-	* - per-source (s) distributions
-	* - mass loading at ground locations
-	*
-	* All arrays are allocated here to centralize memory management
-	* and make the data dependencies of the main computation explicit.
-	*
-	* Note:
-	* The sizes depend on global dimensions such as ZDIM, PHIDECDIM,
-	* SDIM_FOR_FALL_CALC, and LOCDIM.
-	*/
-
-	// TODO: These arrays can be grouped into a SimulationWorkspace struct
-
-	double *ttlfalltime, *driftX, *driftY;
-	double *ttlfalltimesummary, *ttldriftXsummary, *ttldriftYsummary;
-	double *ttlfalltimephidec, *ttldriftXphidec, *ttldriftYphidec;
-	double *massreleased_per_ds_and_phidec;
-	SEG *massreleased_per_ds;
-	double *driftX_s, *driftY_s, *sigma_square;
-	double *tmpmassloading, *ttlmassloading, *cummassphi;
-	DEP *locdatastruct;
-	RELEASE *r;
-
-	allocate_work_arrays(
-		&ttlfalltime, &driftX, &driftY,
-		&ttlfalltimesummary, &ttldriftXsummary, &ttldriftYsummary,
-		&ttlfalltimephidec, &ttldriftXphidec, &ttldriftYphidec,
-		&massreleased_per_ds_and_phidec,
-		&massreleased_per_ds,
-		&driftX_s, &driftY_s, &sigma_square,
-		&tmpmassloading, &ttlmassloading, &cummassphi,
-		&locdatastruct, &r
-	);
-
-	/* 5. INITIALIZATION*/
-	initialize_simulation_state(
-		locdatastruct,
-		locX, locY, locZ,
-		ttlmassloading,
-		cummassphi,
-		r,
-		massreleased_per_ds
-	);
-
-	/* 6. MAIN COMPUTATION */
-	calculate_massloading(
-		zmax,
-		h, atmP, atmT, windX, windY,
-		locX, locY, locZ,
-		sourceX, sourceY, sourceZ, sourceRadius,
-		ttlfalltime,
-		driftX,
-		driftY,
-		ttlfalltimesummary,
-		ttldriftXsummary,
-		ttldriftYsummary,
-		ttlfalltimephidec,
-		ttldriftXphidec,
-		ttldriftYphidec,
-		massreleased_per_ds_and_phidec,
-		massreleased_per_ds,
-		driftX_s,
-		driftY_s,
-		sigma_square,
-		tmpmassloading,
-		ttlmassloading,
-		cummassphi,
-		locdatastruct,
-		r
-	);
-
-	/* 7. OUTPUT */
-	/* 7.1. falltime and drift */
-	if(WRITE_FALL_INFO_FILES){	// DEFINED IN CONFIG FILE
-	const char *name1 = "falltime.txt";
-	printfallsummary(name1, h, ttlfalltimesummary, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
-	const char *name2 = "falldriftX.txt";
-	printfallsummary(name2, h, ttldriftXsummary, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
-	const char *name3 = "falldriftY.txt";
-	printfallsummary(name3, h, ttldriftYsummary, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
-	printparticlereleased(r);			//particle_released.txt
-	printsegregation_per_ds(massreleased_per_ds); //segregation_per_ds.txt
-	}
-
-	/* 7.2. massloading and isopach */
-	sumwrite(locdatastruct, ttlmassloading, cummassphi);	//calculate mean diameter for each location
-	if(WRITE_MASSLOADING){printdeposit(locdatastruct);		//massloading.txt
-	createisopachdata(locdatastruct);}						//S_vs_Area.txt
-	
-	/* 8. CLEAN UP */
-	free_all(
-		wind_alt, wind_v, wind_dir, wind_tmp, wind_pres,
-		locX, locY, locZ,
-		plume_trajX, plume_trajY, plume_trajZ, plume_trajR, plume_trajT,
-		sourceX, sourceY, sourceZ, sourceRadius, sourceT,
-		h, atmT, atmP, windX, windY,
-		ttlfalltime, driftX, driftY,
-		ttlfalltimesummary, ttldriftXsummary, ttldriftYsummary,
-		ttlfalltimephidec, ttldriftXphidec, ttldriftYphidec,
-		massreleased_per_ds_and_phidec, massreleased_per_ds,
-		driftX_s, driftY_s, sigma_square,
-		tmpmassloading, ttlmassloading, cummassphi,
-		locdatastruct, r
-	);
-}	// End of main
-
 void create_source_array(double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *sourceT, double *plume_trajX, double *plume_trajY, double *plume_trajZ, double *plume_trajR, double *plume_trajT){
 	double r = 0.0;
 	for(int j = 0; j < SDIM_FOR_FALL_CALC; j++){
@@ -1079,7 +1200,7 @@ typedef struct {
 
 
 typedef struct {
-    size_t PSZC;
+    size_t PSZ;
     size_t LSP;
 
     DeviceBuffers device;
@@ -1102,13 +1223,13 @@ static void allocate_device_buffers_struct(Buffers *b, int chunk_locdim)
         SDIMCUTOFF * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.centXD,
-        b->PSZC * sizeof(float)));
+        b->PSZ * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.centYD,
-        b->PSZC * sizeof(float)));
+        b->PSZ * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.sigsqD,
-        b->PSZC * sizeof(float)));
+        b->PSZ * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.locXD,
         chunk_locdim * sizeof(float)));
@@ -1147,7 +1268,7 @@ static void pack_fixed_data_buffers(
         b->host.sourceZF[i] = (float)sourceZ[i];
     }
 
-    for(size_t ipszc = 0; ipszc < b->PSZC; ipszc++){
+    for(size_t ipszc = 0; ipszc < b->PSZ; ipszc++){
         phidec = (int)(ipszc / (SDIMCUTOFF * ZDIM));
         s      = (int)((ipszc / ZDIM) % SDIMCUTOFF);
         z      = (int)(ipszc % ZDIM);
@@ -1201,21 +1322,21 @@ static void copy_fixed_data_to_device_buffers(Buffers *b)
 	CUDA_CHECK(cudaMemcpy(
 		b->device.centXD,
 		b->host.centXF,
-		b->PSZC * sizeof(float),
+		b->PSZ * sizeof(float),
 		cudaMemcpyHostToDevice
 	));
 
 	CUDA_CHECK(cudaMemcpy(
 		b->device.centYD,
 		b->host.centYF,
-		b->PSZC * sizeof(float),
+		b->PSZ * sizeof(float),
 		cudaMemcpyHostToDevice
 	));
 
 	CUDA_CHECK(cudaMemcpy(
 		b->device.sigsqD,
 		b->host.sigsqF,
-		b->PSZC * sizeof(float),
+		b->PSZ * sizeof(float),
 		cudaMemcpyHostToDevice
 	));
 
@@ -1405,15 +1526,15 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	/* 1. Define size of arrays used in GPU */
 	
 	/* ---- dimensions and sizes --------------------------------------
-	 * PSZC : size of arrays indexed by (phidec, source, height_interval)
+	 * PSZ : size of arrays indexed by (phidec, source, height_interval)
 	 *        e.g., driftcentXs, driftcentYs, sigma_square
-	 *        PSZC stands Particle size, Souce and Z of a particle Cloud
+	 *        PSZ stands Particle size, Souce and Z of a particle Cloud
 	 *
 	 * LSP  : size of arrays indexed by (location, phidec, source)
 	 *        e.g., lspml
 	 */
 	size_t LSP;
-	size_t PSZC; 
+	size_t PSZ; 
 	
 	/* ---- index definitions --------------------------------------
 	 * phidec : phi (grain size) subdivision index
@@ -1432,7 +1553,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	//int ipsz;
 	//int ips;
 
-	PSZC = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZC = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
+	PSZ = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZ = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
 	LSP = (size_t)chunk_locdim * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
 
 	/* end of 1.*/
@@ -1449,9 +1570,9 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	// Allocate host buffers used for double-to-float conversion
 	float *sourceZF, *centXF, *centYF, *sigsqF, *locXF, *locYF, *locZF, *massreleasedF;
 	sourceZF = (float *)malloc(SDIMCUTOFF * sizeof(float));
-	centXF = (float *)malloc(PSZC * sizeof(float));
-	centYF = (float *)malloc(PSZC * sizeof(float));
-	sigsqF = (float *)malloc(PSZC * sizeof(float));
+	centXF = (float *)malloc(PSZ * sizeof(float));
+	centYF = (float *)malloc(PSZ * sizeof(float));
+	sigsqF = (float *)malloc(PSZ * sizeof(float));
 
 	locXF = (float *)malloc(chunk_locdim * sizeof(float));
 	locYF = (float *)malloc(chunk_locdim * sizeof(float));
@@ -1470,7 +1591,7 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	/* 3. Device Buffer Allocation */
 	Buffers b;
 
-	b.PSZC = PSZC;
+	b.PSZ = PSZ;
 	b.LSP  = LSP;
 
 	/* host bridge: required before prepare */

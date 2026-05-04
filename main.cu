@@ -243,6 +243,214 @@ void phigenerator();
 void phiconvert();
 double calc_pdf_fraction(double phi);
 
+void read_wind_file(
+    const char *filename,
+    int *windlinenum,
+    double **wind_alt,
+    double **wind_v,
+    double **wind_dir,
+    double **wind_tmp,
+    double **wind_pres
+){
+    FILE *in_wind = fopen(filename, "r");
+
+    *windlinenum = get_wind_line_number(in_wind);
+    rewind(in_wind);
+
+    *wind_alt  = (double *)malloc(*windlinenum * sizeof(double));
+    *wind_v    = (double *)malloc(*windlinenum * sizeof(double));
+    *wind_dir  = (double *)malloc(*windlinenum * sizeof(double));
+    *wind_tmp  = (double *)malloc(*windlinenum * sizeof(double));
+    *wind_pres = (double *)malloc(*windlinenum * sizeof(double));
+
+    read_wind(in_wind, *wind_alt, *wind_v, *wind_dir, *wind_tmp, *wind_pres);
+
+    fclose(in_wind);
+}
+
+void read_loc_file(
+    const char *filename,
+    int *locdim,
+    double **locX,
+    double **locY,
+    double **locZ
+){
+    FILE *in_loc = fopen(filename, "r");
+
+    *locdim = get_line_number(in_loc);
+    rewind(in_loc);
+
+    *locX = (double *)malloc(*locdim * sizeof(double));
+    *locY = (double *)malloc(*locdim * sizeof(double));
+    *locZ = (double *)malloc(*locdim * sizeof(double));
+
+    read_loc(in_loc, *locX, *locY, *locZ);
+
+    fclose(in_loc);
+}
+
+void write_plume_files(
+    int WRITE_COLUMN_FILES,
+    int SDIM_FOR_PLUME_CALC,
+    int SDIM_FOR_FALL_CALC,
+    double *plume_trajX,
+    double *plume_trajY,
+    double *plume_trajZ,
+    double *plume_trajR,
+    double *plume_trajT,
+    double *sourceX,
+    double *sourceY,
+    double *sourceZ,
+    double *sourceRadius,
+    double *sourceT
+){
+    if(WRITE_COLUMN_FILES){
+        FILE *outfile = fopen("plumetraj.txt", "w");
+        const char *header = "calc_step\tx\ty\tz\tR\ttime\n";
+        printxyzq(outfile, header, SDIM_FOR_PLUME_CALC,
+                  plume_trajX, plume_trajY, plume_trajZ,
+                  plume_trajR, plume_trajT);
+        fclose(outfile);
+    }
+
+    if(WRITE_COLUMN_FILES){
+        FILE *outfile = fopen("plumesourceposition.txt", "w");
+        const char *header = "source\tx\ty\tz\tR\ttime\n";
+        printxyzq(outfile, header, SDIM_FOR_FALL_CALC,
+                  sourceX, sourceY, sourceZ,
+                  sourceRadius, sourceT);
+        fclose(outfile);
+    }
+}
+
+void build_atmosphere_tables(
+    int windlinenum,
+    double Ht,
+    double *wind_v,
+    double *wind_dir,
+    double *wind_tmp,
+    double *wind_pres,
+    double **h,
+    double **atmT,
+    double **atmP,
+    double **windX,
+    double **windY,
+    int *zmax
+){
+    *zmax = ceil(Ht / Z_DELTA);
+    ZDIM = *zmax + 1;
+
+    *h     = (double *)malloc(ZDIM * sizeof(double));
+    *atmT  = (double *)malloc(ZDIM * sizeof(double));
+    *atmP  = (double *)malloc(ZDIM * sizeof(double));
+    *windX = (double *)malloc(ZDIM * sizeof(double));
+    *windY = (double *)malloc(ZDIM * sizeof(double));
+
+    for(int z = 0; z < *zmax; z++){
+        (*h)[z] = z * Z_DELTA;
+    }
+    (*h)[*zmax] = Ht;
+
+    atmosphere(
+        windlinenum,
+        *h, *atmT, *atmP, *windX, *windY,
+        wind_v, wind_dir, wind_tmp, wind_pres
+    );
+}
+
+void build_plume_and_sources(
+    int windlinenum,
+    double *wind_alt,
+    double *wind_v,
+    double *wind_dir,
+    double *wind_tmp,
+    double *wind_pres,
+    double **plume_trajX,
+    double **plume_trajY,
+    double **plume_trajZ,
+    double **plume_trajR,
+    double **plume_trajT,
+    double **sourceX,
+    double **sourceY,
+    double **sourceZ,
+    double **sourceRadius,
+    double **sourceT
+){
+    // plume trajectory
+    *plume_trajX = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajY = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajZ = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajR = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajT = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+
+    Ht = windy(
+        windlinenum,
+        *plume_trajX, *plume_trajY, *plume_trajZ,
+        *plume_trajR, *plume_trajT,
+        wind_alt, wind_v, wind_dir, wind_tmp, wind_pres
+    );
+
+    // source
+    *sourceX = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceY = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceZ = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceRadius = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceT = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+
+    create_source_array(
+        *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT,
+        *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT
+    );
+}
+
+void allocate_work_arrays(
+    double **ttlfalltime,
+    double **driftX,
+    double **driftY,
+    double **ttlfalltimesummary,
+    double **ttldriftXsummary,
+    double **ttldriftYsummary,
+    double **ttlfalltimephidec,
+    double **ttldriftXphidec,
+    double **ttldriftYphidec,
+    double **massreleased_per_ds_and_phidec,
+    SEG **massreleased_per_ds,
+    double **driftX_s,
+    double **driftY_s,
+    double **sigma_square,
+    double **tmpmassloading,
+    double **ttlmassloading,
+    double **cummassphi,
+    DEP **locdatastruct,
+    RELEASE **r
+){
+    *ttlfalltime = (double*)calloc(ZDIM, sizeof(double));
+    *driftX      = (double*)calloc(ZDIM, sizeof(double));
+    *driftY      = (double*)calloc(ZDIM, sizeof(double));
+
+    *ttlfalltimesummary = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
+    *ttldriftXsummary   = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
+    *ttldriftYsummary   = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
+
+    *ttlfalltimephidec = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
+    *ttldriftXphidec   = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
+    *ttldriftYphidec   = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
+
+    *massreleased_per_ds_and_phidec = (double*)calloc(SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
+    *massreleased_per_ds = (SEG*)calloc(SDIM_FOR_FALL_CALC, sizeof(SEG));
+
+    *driftX_s = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
+    *driftY_s = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
+    *sigma_square = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
+
+    *tmpmassloading = (double*)calloc(LOCDIM, sizeof(double));
+    *ttlmassloading = (double*)calloc(LOCDIM, sizeof(double));
+    *cummassphi     = (double*)calloc(LOCDIM, sizeof(double));
+
+    *locdatastruct = (DEP *)calloc(LOCDIM, sizeof(DEP));
+    *r = (RELEASE *)calloc(MIN_GRAINSIZE - MAX_GRAINSIZE, sizeof(RELEASE));
+}
+
 int main(int argc, char *argv[]) {
 	/* read config file */
 	char string[30];
@@ -252,38 +460,29 @@ int main(int argc, char *argv[]) {
 	phiconvert();   // make max and minimum grain sizes ordered
 
 	/* read wind file */
-	FILE *in_wind;
 	int windlinenum = 0;
-	in_wind = fopen(argv[2], "r");
-	windlinenum = get_wind_line_number(in_wind);
-	//printf("\n\nthe total line number of wind file is %d\n", windlinenum);
-	rewind(in_wind);
-
 	double *wind_alt, *wind_v, *wind_dir, *wind_tmp, *wind_pres;
-	wind_alt = (double *)malloc(windlinenum * sizeof(double));
-	wind_v = (double *)malloc(windlinenum * sizeof(double));
-	wind_dir = (double *)malloc(windlinenum * sizeof(double));
-	wind_tmp = (double *)malloc(windlinenum * sizeof(double));
-	wind_pres = (double *)malloc(windlinenum * sizeof(double));
 
-	read_wind(in_wind, wind_alt, wind_v, wind_dir, wind_tmp, wind_pres);
-	fclose(in_wind);
+	read_wind_file(
+		argv[2],
+		&windlinenum,
+		&wind_alt,
+		&wind_v,
+		&wind_dir,
+		&wind_tmp,
+		&wind_pres
+	);
 
 	/* read loc file */
-	FILE *in_loc;
-	in_loc = fopen(argv[3], "r");
-	LOCDIM = get_line_number(in_loc);
-	//printf("\n\nthe total line number of location file is %d\n", LOCDIM);
-	rewind(in_loc);
-
 	double *locX, *locY, *locZ;
-	locX = (double *)malloc(LOCDIM * sizeof(double));
-	locY = (double *)malloc(LOCDIM * sizeof(double));
-	locZ = (double *)malloc(LOCDIM * sizeof(double));
 
-    read_loc(in_loc, locX, locY, locZ);
-	fclose(in_loc);
-	/* end of read loc file */
+	read_loc_file(
+		argv[3],
+		&LOCDIM,
+		&locX,
+		&locY,
+		&locZ
+	);
 
 	SDIM_FOR_PLUME_CALC = (S_MAX + S_DELTA_FOR_PLUME_CALC - 1) / S_DELTA_FOR_PLUME_CALC; // dimension of plume calculation; calculated plume should be longer than source plume
 	SDIM_FOR_FALL_CALC = S_MAX / S_DELTA_FOR_FALL_CALC; // dimension of source
@@ -292,55 +491,44 @@ int main(int argc, char *argv[]) {
 	
 	SDIMCUTOFF = SDIM_FOR_FALL_CALC;
 
-	// Trajectory of plume center for particle calculation
+	// Obtain plume trajectory and set particle sources on it
 	double *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT;
-	plume_trajX = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-	plume_trajY = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-	plume_trajZ = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-	plume_trajR = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-	plume_trajT = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double)); //20240828 time from vent to a certain s
-	Ht = windy(windlinenum, plume_trajX, plume_trajY, plume_trajZ, plume_trajR, plume_trajT, wind_alt, wind_v, wind_dir, wind_tmp, wind_pres);
-	
-	// Trajectory of plume center for FALL CALCULATION (array of point data of particle source along the plume)
 	double *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT;
-	sourceX = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-	sourceY = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-	sourceZ = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-	sourceRadius = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-	sourceT = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-	
-	create_source_array(sourceX, sourceY, sourceZ, sourceRadius, sourceT, plume_trajX, plume_trajY, plume_trajZ, plume_trajR, plume_trajT);
-	
-	// Write original trajectory file
-	if(WRITE_COLUMN_FILES){
-		FILE *outfile;
-		outfile = fopen("plumetraj.txt", "w");
-    const char *header2 = "calc_step\tx\ty\tz\tR\ttime\n";
-		printxyzq(outfile, header2, SDIM_FOR_PLUME_CALC, plume_trajX, plume_trajY, plume_trajZ, plume_trajR, plume_trajT);
-		fclose(outfile);
-	}
+
+	build_plume_and_sources(
+		windlinenum,
+		wind_alt, wind_v, wind_dir, wind_tmp, wind_pres,
+		&plume_trajX, &plume_trajY, &plume_trajZ, &plume_trajR, &plume_trajT,
+		&sourceX, &sourceY, &sourceZ, &sourceRadius, &sourceT
+	);
 	
 	// Write original trajectory file
-	if(WRITE_COLUMN_FILES){
-		FILE *outfile;
-		outfile = fopen("plumesourceposition.txt", "w");
-    const char *header2 = "source\tx\ty\tz\tR\ttime\n";
-		printxyzq(outfile, header2, SDIM_FOR_FALL_CALC, sourceX, sourceY, sourceZ, sourceRadius, sourceT);
-		fclose(outfile);
-	}
+	write_plume_files(
+		WRITE_COLUMN_FILES,
+		SDIM_FOR_PLUME_CALC,
+		SDIM_FOR_FALL_CALC,
+		plume_trajX, plume_trajY, plume_trajZ, plume_trajR, plume_trajT,
+		sourceX, sourceY, sourceZ, sourceRadius, sourceT
+	);
 
 	// Obtain atmospheric condition at each interval
 	double *h, *atmT, *atmP, *windX, *windY;
-	int zmax = ceil(Ht / Z_DELTA);
-	ZDIM = zmax + 1;
-	h = (double *)malloc(ZDIM * sizeof(double));
-	atmT = (double *)malloc(ZDIM * sizeof(double)); atmP = (double *)malloc(ZDIM * sizeof(double));
-	windX = (double *)malloc(ZDIM * sizeof(double)); windY = (double *)malloc(ZDIM * sizeof(double));
-	for(int z = 0; z < zmax; z++){
-		h[z] = z * Z_DELTA;
-	}
-	h[zmax] = Ht;
-	atmosphere(windlinenum, h, atmT, atmP, windX, windY, wind_v, wind_dir, wind_tmp, wind_pres);
+	int zmax;
+
+	build_atmosphere_tables(
+		windlinenum,
+		Ht,
+		wind_v,
+		wind_dir,
+		wind_tmp,
+		wind_pres,
+		&h,
+		&atmT,
+		&atmP,
+		&windX,
+		&windY,
+		&zmax
+	);
 
 	// Obtain fall time at each 
 	/*The Loop 158; main loop for mass loading calculation for each location on the ground*/
@@ -350,44 +538,28 @@ int main(int argc, char *argv[]) {
 	double grainsize, phi;
 	//double released_mass_of_fraction = 0.0;
 
-	double *driftX, *driftY;
-	double *ttlfalltime;
-	ttlfalltime = (double*)calloc(ZDIM, sizeof(double));
-	driftX = (double*)calloc(ZDIM, sizeof(double));
-	driftY = (double*)calloc(ZDIM, sizeof(double));
-
+	double *ttlfalltime, *driftX, *driftY;
 	double *ttlfalltimesummary, *ttldriftXsummary, *ttldriftYsummary;
-	ttlfalltimesummary = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
-	ttldriftXsummary = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
-	ttldriftYsummary = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
-	
 	double *ttlfalltimephidec, *ttldriftXphidec, *ttldriftYphidec;
-	ttlfalltimephidec = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
-	ttldriftXphidec =   (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
-	ttldriftYphidec =   (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
-
 	double *massreleased_per_ds_and_phidec;
-	massreleased_per_ds_and_phidec = (double*)calloc(SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
-	
 	SEG *massreleased_per_ds;
-	massreleased_per_ds = (SEG*)calloc(SDIM_FOR_FALL_CALC, sizeof(SEG));
-
 	double *driftX_s, *driftY_s, *sigma_square;
-	driftX_s = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
-	driftY_s = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
-	sigma_square = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
-
 	double *tmpmassloading, *ttlmassloading, *cummassphi;
-	tmpmassloading = (double*)calloc(LOCDIM, sizeof(double));
-	ttlmassloading = (double*)calloc(LOCDIM, sizeof(double));
-	cummassphi = (double*)calloc(LOCDIM, sizeof(double));
-
 	DEP *locdatastruct;
-	locdatastruct = (DEP *)calloc(LOCDIM, sizeof(DEP));
-	locwrite(locdatastruct, locX, locY, locZ);
-
 	RELEASE *r;
-	r = (RELEASE *)calloc(MIN_GRAINSIZE - MAX_GRAINSIZE, sizeof(RELEASE));
+
+	allocate_work_arrays(
+		&ttlfalltime, &driftX, &driftY,
+		&ttlfalltimesummary, &ttldriftXsummary, &ttldriftYsummary,
+		&ttlfalltimephidec, &ttldriftXphidec, &ttldriftYphidec,
+		&massreleased_per_ds_and_phidec,
+		&massreleased_per_ds,
+		&driftX_s, &driftY_s, &sigma_square,
+		&tmpmassloading, &ttlmassloading, &cummassphi,
+		&locdatastruct, &r
+	);
+
+	locwrite(locdatastruct, locX, locY, locZ);
 	obtaintheoreticallyreleased(r);
 
 	clearary(LOCDIM, ttlmassloading);

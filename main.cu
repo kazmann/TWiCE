@@ -681,13 +681,13 @@ typedef struct {
 // FUNCTIONS FOR CUDA
 
 /* 3. Device Buffer Allocation */
-static void allocate_device_buffers_struct(Buffers *b)
+static void allocate_device_buffers_struct(Buffers *b, int chunk_locdim)
 {
     CUDA_CHECK(cudaMalloc((void**)&b->device.lspmlD,
         b->LSP * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.ttlmlD,
-        LOCDIM * sizeof(float)));
+        chunk_locdim * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.sourceZD,
         SDIMCUTOFF * sizeof(float)));
@@ -702,13 +702,13 @@ static void allocate_device_buffers_struct(Buffers *b)
         b->PSZC * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.locXD,
-        LOCDIM * sizeof(float)));
+        chunk_locdim * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.locYD,
-        LOCDIM * sizeof(float)));
+        chunk_locdim * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.locZD,
-        LOCDIM * sizeof(float)));
+        chunk_locdim * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.massreleasedD,
         SDIMCUTOFF * PHIDECDIM * sizeof(float)));
@@ -943,8 +943,9 @@ static void prepare_mass_loading(
     double *driftcentXs,
     double *driftcentYs,
     double *sigma_square,
-    double *massreleased){
-    allocate_device_buffers_struct(b);
+    double *massreleased,
+    int chunk_locdim){
+    allocate_device_buffers_struct(b, chunk_locdim);
 
     pack_fixed_data_buffers(
         b,
@@ -990,6 +991,8 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	* F in the name of parameter (e.g. ttlmlF) means such parameters are temporaly ones in CPU
 	*/
 
+	int chunk_locdim = 8192;  // Empirically tuned on NVIDIA GeForce RTX 3060; output verified by diff
+
 	/* 1. Define size of arrays used in GPU */
 	
 	/* ---- dimensions and sizes --------------------------------------
@@ -1021,14 +1024,14 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	//int ips;
 
 	PSZC = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZC = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
-	LSP = (size_t)LOCDIM * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
+	LSP = (size_t)chunk_locdim * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
 
 	/* end of 1.*/
 
 	/* 2. Host Buffer Allocation */
 
 	float *ttlmlF;
-	ttlmlF = (float *)malloc(LOCDIM * sizeof(float));
+	ttlmlF = (float *)malloc(chunk_locdim * sizeof(float));
 	if (!ttlmlF) {
     fprintf(stderr, "Error: malloc failed for ttlmlF\n");
     exit(EXIT_FAILURE);
@@ -1041,9 +1044,9 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 	centYF = (float *)malloc(PSZC * sizeof(float));
 	sigsqF = (float *)malloc(PSZC * sizeof(float));
 
-	locXF = (float *)malloc(LOCDIM * sizeof(float));
-	locYF = (float *)malloc(LOCDIM * sizeof(float));
-	locZF = (float *)malloc(LOCDIM * sizeof(float));
+	locXF = (float *)malloc(chunk_locdim * sizeof(float));
+	locYF = (float *)malloc(chunk_locdim * sizeof(float));
+	locZF = (float *)malloc(chunk_locdim * sizeof(float));
 
 	massreleasedF = (float *)malloc(PHIDECDIM * SDIMCUTOFF * sizeof(float));
 	
@@ -1081,9 +1084,10 @@ void calc_mass_loading(double *sourceZ, double *driftcentXs, double *driftcentYs
 		driftcentXs,
 		driftcentYs,
 		sigma_square,
-		massreleased
+		massreleased,
+    	chunk_locdim
 	);
-	int chunk_locdim = 8192;  // Empirically tuned on NVIDIA GeForce RTX 3060; output verified by diff
+	
 	/* Loop for compute mass loading */
 	for (int loc0 = 0; loc0 < LOCDIM; loc0 += chunk_locdim) {
 

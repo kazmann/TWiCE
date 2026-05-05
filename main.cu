@@ -199,7 +199,7 @@ void printdeposit(DEP *location_properties);
 void clearary(int dim, double *ary);
 int compare_ttlmassloading(const void *a, const void *b);
 int compare_Md(const void * a, const void * b);
-void create_source_array(double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *sourceT, double *plume_trajX, double *plume_trajY, double *plume_traj_Z, double *plume_trajR, double *plume_trajT);
+void set_source_points_on_plume(double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *sourceT, double *plume_trajX, double *plume_trajY, double *plume_traj_Z, double *plume_trajR, double *plume_trajT);
 
 void createisopachdata(DEP *l);
 void extractisopachdata(DEP *l);
@@ -310,8 +310,7 @@ void initialize_simulation_state(DEP *location_properties,
                                  double *locX, double *locY, double *locZ,
                                  double *ttlmassloading,
                                  double *cummassphi,
-                                 RELEASE *r,
-                                 SEG *massreleased_per_ds);
+                                 RELEASE *r);
 
 void calculate_massloading(int zmax,
                            double *h, double *atmP, double *atmT,
@@ -370,7 +369,11 @@ void free_all(double *wind_alt, double *wind_v, double *wind_dir,
 
 
 
-
+// =========================
+// Main program
+// Orchestrates the simulation workflow:
+// input → setup → compute → output → cleanup
+// =========================
 
 int main(int argc, char *argv[]) {
 	/* 1. INPUT */
@@ -521,8 +524,7 @@ int main(int argc, char *argv[]) {
 		locX, locY, locZ,
 		ttlmassloading,
 		cummassphi,
-		r,
-		massreleased_per_ds
+		r
 	);
 
 	/* 6. MAIN COMPUTATION */
@@ -590,6 +592,20 @@ int main(int argc, char *argv[]) {
 
 }	// End of main 
 
+/*
+ * Read raw atmospheric (wind) data from the input file.
+ *
+ * This function only reads the original input profiles and stores them
+ * as given in the file. Interpolation onto the simulation height grid
+ * is done later by build_atmosphere_tables().
+ *
+ * Outputs:
+ * - wind_alt[i]  : altitude of input data point [m]
+ * - wind_v[i]    : wind speed [m/s]
+ * - wind_dir[i]  : wind direction [deg]
+ * - wind_tmp[i]  : temperature [K]
+ * - wind_pres[i] : pressure [Pa]
+ */
 void read_wind_file(
     const char *filename,
     int *windlinenum,
@@ -622,6 +638,18 @@ void read_wind_file(
     fclose(in_wind);
 }
 
+/*
+ * Read ground location data from the input file.
+ *
+ * This function only reads the original location coordinates.
+ * These coordinates are later stored in location_properties by
+ * initialize_simulation_state().
+ *
+ * Outputs:
+ * - locX[j] : X-coordinate of ground location j [m]
+ * - locY[j] : Y-coordinate of ground location j [m]
+ * - locZ[j] : elevation of ground location j [m]
+ */
 void read_loc_file(
     const char *filename,
     int *locdim,
@@ -689,13 +717,16 @@ void write_plume_files(
 }
 
 /*
- * Build atmospheric and wind profiles on the vertical grid used in the simulation.
+ * Build atmospheric and wind profiles on the simulation vertical grid.
  *
- * Input atmospheric data are interpolated onto height levels used by the code.
- * The grid is regular with spacing Z_DELTA except for the top level,
+ * This function interpolates raw atmospheric data (read by read_wind_file)
+ * onto a regular vertical grid used in the simulation.
+ *
+ * The grid has uniform spacing Z_DELTA except for the top level,
  * where h[zmax] is explicitly set to the plume height Ht.
  *
- * Inputs: wind_v, wind_dir, wind_tmp, wind_pres from argv[2]
+ * Inputs:
+ * - wind_v, wind_dir, wind_tmp, wind_pres : raw atmospheric data
  *
  * Outputs:
  * - h[z]     : height level [m]
@@ -815,7 +846,7 @@ void build_plume_and_sources(
     *sourceT = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
 
 	// interpolate source points along plume trajectory
-    create_source_array(
+    set_source_points_on_plume(
         *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT,
         *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT
     );
@@ -893,6 +924,14 @@ void allocate_work_arrays(
     *r = (RELEASE *)calloc(MIN_GRAINSIZE - MAX_GRAINSIZE, sizeof(RELEASE));
 }
 
+/*
+ * Initialize simulation state before main computation.
+ *
+ * This function:
+ * - assigns ground location coordinates to location_properties
+ * - resets mass loading and cumulative mass arrays
+ * - initializes theoretical released mass for each phi class
+ */
 void initialize_simulation_state(
     DEP *location_properties,
     double *locX,
@@ -900,8 +939,7 @@ void initialize_simulation_state(
     double *locZ,
     double *ttlmassloading,
     double *cummassphi,
-    RELEASE *r,
-    SEG *massreleased_per_ds
+    RELEASE *r
 ){
     locwrite(location_properties, locX, locY, locZ);
 
@@ -991,7 +1029,8 @@ void calculate_massloading(
 	* 4. Compute cloud center positions and dispersion from each source (F20)
 	*    → cloud_center_x/y, cloud_sigma2
 	*
-	* 5. Convert particle release into per-source (s) representation
+	* 5. Output cloud-center trajectory and sum released mass over decimal phi bins
+    *    to obtain per-source mass for the current integer phi interval
 	*
 	* 6. Compute mass loading at ground locations
 	*    → tmpmassloading → accumulate into ttlmassloading
@@ -1099,6 +1138,19 @@ void calculate_massloading(
 	}// END OF INTEGER PHI LOOP
 }
 
+/*
+ * Free all dynamically allocated memory used in the simulation.
+ *
+ * This includes:
+ * - input data arrays
+ * - plume and source arrays
+ * - atmospheric profiles
+ * - working arrays for fall, drift, and mass loading
+ * - location properties and release data structures
+ *
+ * Centralizing deallocation helps prevent memory leaks and
+ * keeps resource management consistent.
+ */
 void free_all(
     double *wind_alt,
     double *wind_v,
@@ -1204,7 +1256,20 @@ void free_all(
     free(r);
 }
 
-void create_source_array(double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *sourceT, double *plume_trajX, double *plume_trajY, double *plume_trajZ, double *plume_trajR, double *plume_trajT){
+/*
+ * Define particle source points along the plume trajectory.
+ *
+ * Source points are placed at regular intervals along plume-axis distance
+ * using S_DELTA_FOR_FALL_CALC. Their position, radius, and travel time are
+ * obtained by linear interpolation from the plume trajectory calculated at
+ * intervals of S_DELTA_FOR_PLUME_CALC.
+ *
+ * Outputs:
+ * - sourceX/Y/Z : coordinates of particle source points [m]
+ * - sourceR     : plume radius at each source point [m]
+ * - sourceT     : elapsed time from vent to each source point [s]
+ */
+void set_source_points_on_plume(double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *sourceT, double *plume_trajX, double *plume_trajY, double *plume_trajZ, double *plume_trajR, double *plume_trajT){
 	double r = 0.0;
 	for(int j = 0; j < SDIM_FOR_FALL_CALC; j++){
 		for(int i = 0; i < SDIM_FOR_PLUME_CALC + 1; i++){
@@ -1678,18 +1743,28 @@ static void compute_mass_loading(
     copy_result_to_host_buffers(b, ttlml, loc0, locN);
 }
 
-// D01a and D01b FOR GPU PROCESSING
-// Calculate mass loading of a certain grain size on a certain point on the ground (Sloc) from a certain source: Sloc(phi, s)
+/*
+ * Compute mass loading at ground locations using GPU acceleration.
+ *
+ * This (calc_mass_loading) function:
+ * - prepares host buffers (double → float conversion)
+ * - allocates and initializes GPU buffers
+ * - launches CUDA kernels for mass loading computation
+ * - retrieves total mass loading per location
+ *
+ * GPU computation:
+ * - funcD01a: compute partial mass loading for each (location, source, phidec)
+ * - funcD01b: reduce over (source, phidec) to obtain total per location
+ *
+ * Data layout:
+ * - PSZ: (phidec, source, z)
+ * - LSP: (location, phidec, source)
+ *
+ * Note:
+ * Computation is performed in chunks over locations for memory efficiency.
+ */
 void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *lspml, double *ttlml, double *massreleased){
-	/* This function prepares input arrays for GPU processing,
-	* transfers them to GPU memory, launches CUDA kernels,
-	* and retrieves the reduced total mass loading per location.
-	*
-	* On the GPU:
-	*   funcD01a evaluates contributions per (location, phidec, source).
-	*   funcD01b performs a reduction over (phidec, source)
-	*           to obtain total mass loading per location.
-	*
+	/* 
 	* D in the name of parameter (e.g. ttlmlD) comes from "Device", which means such parameters
 	* are used in GPU calculation
 	* F in the name of parameter (e.g. ttlmlF) means such parameters are temporaly ones in CPU
@@ -1698,15 +1773,10 @@ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_ce
 	int chunk_locdim = 8192;  // Empirically tuned on NVIDIA GeForce RTX 3060; output verified by diff
 
 	/* 1. Define size of arrays used in GPU */
-	
-	/* ---- dimensions and sizes --------------------------------------
-	 * PSZ : size of arrays indexed by (phidec, source, height_interval)
-	 *        e.g., cloud_center_x, cloud_center_y, cloud_sigma2
-	 *        PSZ stands Particle size, Souce and Z of a particle Cloud
-	 *
-	 * LSP  : size of arrays indexed by (location, phidec, source)
-	 *        e.g., lspml
-	 */
+	/*
+	* PSZ : size of arrays indexed by (phidec, source, height_interval)
+	* LSP : size of arrays indexed by (location, phidec, source)
+	*/
 	size_t LSP;
 	size_t PSZ; 
 	
@@ -1874,8 +1944,10 @@ __global__ void funcD01a(
         s      = (tid / phidecdim) % sdim;
         phidec = tid % phidecdim;
 
-        /*
-         * z is the vertical layer containing the current location.
+		/*
+		* Determine vertical layer index z such that
+		*   z * zdelta <= locZ[j] < (z + 1) * zdelta
+		
          * Arrays centX, centY, and cloud_sigma2 are interpolated
          * between z and z+1.
          */
@@ -1912,7 +1984,7 @@ __global__ void funcD01a(
             + pow((depcentY - locY[j]), 2);
 
         /*
-         * Only sources above the current location contribute
+         * Only sources above the current location (locZ[j]) contribute
          * to mass loading at that location.
          */
         if(locZ[j] < sourceZD[s]){
@@ -2138,6 +2210,12 @@ void locwrite(DEP *location_properties, double *locX, double *locY, double *locZ
   }
 }
 
+/*
+ * Store mass loading for the current integer phi class.
+ *
+ * This function is intended to be called inside the phi loop,
+ * so that mass loading is accumulated for each phi class.
+ */
 void depwrite(int size, DEP *location_properties, double *loading){
 	int phi;
 	phi = size + MAX_GRAINSIZE + 1;

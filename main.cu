@@ -62,7 +62,7 @@ int WRITE_DEPCENT_TRAJECTORY = 0;
 int WRITE_FALL_INFO_FILES = 0;
 int WRITE_COLUMN_FILES = 0;
 int WRITE_CONF = 0;
-int WRITE_SDIMCUTOFF = 0;
+int PRINT_PROGRESS = 0;
 int WRITE_MASSLOADING = 1;
 int WRITE_DECIMAL_MASSLOADING = 0;
 int WRITE_DECIMAL_FALL_TRAJ = 0;
@@ -188,7 +188,7 @@ void atmosphere(int windlinenum, double *h, double *atmT, double *atmP, double *
 void interval_fall_calc(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime);
 void writettlfallsummary(int phiint, double *ttlfalltime, double *ttlfalltime_phiint);
 void drift_from_a_certain_source(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2);
-void writetrajectory(int phiint, double *cloud_center_x, double *cloud_center_y, double *sigma_squre, double *massreleased, SEG *seg);
+void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double *cloud_center_y, double *sigma_squre, double *massreleased, SEG *seg);
 double calc_cloud_sigma2(double source_radius, double falltime);
 void mass_release_calc(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased);
 double confirm_released_mass(double *massreleased);
@@ -970,7 +970,35 @@ void calculate_massloading(
     int phisize;
     double grainsize, phi;
 
-    
+    /*
+	* Main loop over grain-size classes (phi) to obtain mass loading at each location.
+	*
+	* For each integer phi (outer loop) and its decimal subdivisions (inner loop):
+	*
+	* A result file (massloading.txt) shows total and 1phi-interval mass loadings but
+	* mass loading calculation is done for each 0.1phi classes 
+	*
+	* 1. Compute fall time and horizontal drift for each grain size (F10)
+	*    → ttlfalltime[z], driftX[z], driftY[z]
+	*
+	* 2. Store results for decimal phi classes (phidec) and integer phi classes
+	*
+	* 3. Compute particle release (segregation) along the plume axis
+	*    → massreleased_per_ds_and_phidec
+	*
+	* After finishing decimal phi loop (for one integer phi):
+	*
+	* 4. Compute cloud center positions and dispersion from each source (F20)
+	*    → cloud_center_x/y, cloud_sigma2
+	*
+	* 5. Convert particle release into per-source (s) representation
+	*
+	* 6. Compute mass loading at ground locations
+	*    → tmpmassloading → accumulate into ttlmassloading
+	*
+	* 7. Store results in location_properties and reset temporary arrays
+	*/
+
 	for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
 		for(int phidecimal = 0; phidecimal < PHIDECDIM; phidecimal++){
 
@@ -979,7 +1007,7 @@ void calculate_massloading(
 			grainsize = pow(2, -phi) * 0.001;	// grain size in mm
 
 			/*
-			* interval_fall_calc (F10)
+			* 1. Compute fall time and horizontal drift for each grain size (interval_fall_class; F10)
 			*
 			* Compute fall time and horizontal drift for a given grain size.
 			*
@@ -994,8 +1022,8 @@ void calculate_massloading(
 			*/
 			interval_fall_calc(zmax, phidecimal, grainsize, h, atmP, atmT, windX, windY, driftX, driftY, ttlfalltime);
 			
-			// Summarize and store fall time, drift X, and drift Y for each 0.1-phi size bin
-			// Map ttlfalltime[z] and driftXY[z] to ttlfalltime_phidec[z, phidec] and ttldriftXYphidec[z, phidec]
+			// 2. Store results for decimal phi classes (phidec) and integer phi classes
+			//    Map ttlfalltime[z] and driftXY[z] to ttlfalltime_phidec[z, phidec] and ttldriftXYphidec[z, phidec]
 			writettlfallsummary(phidecimal, ttlfalltime, ttlfalltime_phidec);
 			writettlfallsummary(phidecimal, driftX, ttldriftX_phidec);
 			writettlfallsummary(phidecimal, driftY, ttldriftY_phidec);
@@ -1012,15 +1040,18 @@ void calculate_massloading(
 				writettlfallsummary(phiint, driftX, ttldriftX_phiint);
 				writettlfallsummary(phiint, driftY, ttldriftY_phiint);
 			}
-			/* Calculate particle segregation from each plume interval */
+			/* 3. Compute particle release (segregation) along the plume axis */
 			mass_release_calc(zmax, phidecimal, phi, h, atmP, atmT, windX, windY, massreleased_per_ds_and_phidec);
 		}// END OF DECIMAL PHI LOOP
 		
+		// 4. Compute cloud center positions and dispersion from each source (F20)
 		drift_from_a_certain_source(sourceX, sourceY, sourceZ, sourceRadius, ttlfalltime_phidec, ttldriftX_phidec, ttldriftY_phidec, cloud_center_x, cloud_center_y, cloud_sigma2);
-		writetrajectory(phiint, cloud_center_x, cloud_center_y, cloud_sigma2, massreleased_per_ds_and_phidec, massreleased_per_ds);  // mass released for 1phi interval is also calculated from 0.1 phi interval data
+		// 5. Convert particle release into per-source (s) representation
+		write_cloud_trajectory_and_mass(phiint, cloud_center_x, cloud_center_y, cloud_sigma2, massreleased_per_ds_and_phidec, massreleased_per_ds);  // mass released for 1phi interval is also calculated from 0.1 phi interval data
 		get_sdimcutoff(cloud_sigma2, massreleased_per_ds, phiint);	// obtain SDIMCUTOFF
 		
-		if(WRITE_DECIMAL_FALL_TRAJ){// 20240728 output 0.1 phi interval fallout to each 1 phi interval file
+		// 20240728 output 0.1 phi interval fallout to each 1 phi interval file
+		if(WRITE_DECIMAL_FALL_TRAJ){
 			sprintf(string, "decimal_falltime_%1.0f.txt", phiint + MAX_GRAINSIZE + 1);
 			printfallsummary(string, h, ttlfalltime_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
 			sprintf(string, "decimal_falldriftX_%1.0f.txt", phiint + MAX_GRAINSIZE + 1);
@@ -1037,11 +1068,11 @@ void calculate_massloading(
 		r[phiint].phi = phiint + MAX_GRAINSIZE + 1;
 		r[phiint].actual = confirm_released_mass(massreleased_per_ds_and_phidec);
 		
+		// print calculation status to standard output (per integer phi)
 		phisize = phiint + MAX_GRAINSIZE + 1;
-		if(WRITE_SDIMCUTOFF) printf("PHI = %d\tSDIMCUTOFF = %d\tMASS_RELEASED = %1.4e\n",  phisize, SDIMCUTOFF, r[phiint].actual);
+		if(PRINT_PROGRESS) printf("PHI = %d\tSDIMCUTOFF = %d\tMASS_RELEASED = %1.4e\n",  phisize, SDIMCUTOFF, r[phiint].actual);
 		
-		//if(SDIMCUTOFF < 0){SDIMCUTOFF = 100;}
-		
+		// 6. Compute mass loading at ground locations
 		if(SDIMCUTOFF > 0){
 			double *lspml; // lspml stands for "local-s-phi mass loading"
 						   // =  massloading data for each combination of location, s (position in plume) and phi (grain size, decimal phi)
@@ -2349,10 +2380,10 @@ int init_globals(char *config_file) {
       WRITE_MASSLOADING = strtod(token, NULL);
       if(WRITE_CONF) fprintf(stderr, "WRITE_MASSLOADING = %d\n", WRITE_MASSLOADING);
     }
-    else if (!strncmp(token, "WRITE_SDIMCUTOFF", strlen("WRITE_SDIMCUTOFF"))) {
+    else if (!strncmp(token, "PRINT_PROGRESS", strlen("PRINT_PROGRESS"))) {
       token = strtok_r(NULL, space, ptr1);
-      WRITE_SDIMCUTOFF = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "WRITE_SDIMCUTOFF = %d\n", WRITE_SDIMCUTOFF);
+      PRINT_PROGRESS = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "PRINT_PROGRESS = %d\n", PRINT_PROGRESS);
     }
     else if (!strncmp(token, "MEDIAN_GRAINSIZE", strlen("MEDIAN_GRAINSIZE"))) {
       token = strtok_r(NULL, space, ptr1);
@@ -3602,7 +3633,23 @@ void makewindstruct(int imax, double *alt, double *v, double *dir, double *temp,
 }
 
 
-void writetrajectory(int phiint, double *x, double *y, double *sig, double *r, SEG *seg_ds){
+/*
+ * Write cloud-center trajectory and summarize released mass for one integer phi class.
+ *
+ * For each source interval s along the plume axis, this function:
+ * - sums released mass over decimal phi bins within the current integer phi class
+ * - stores the summed mass in massreleased_per_ds[s].mass_from_ds[phiint]
+ * - optionally writes cloud-center coordinates and dispersion to depcenttraj*.txt
+ *
+ * Inputs:
+ * - x, y   : cloud-center coordinates indexed by (phidec, s, z)
+ * - sig    : cloud dispersion variance indexed by (phidec, s, z)
+ * - r      : released mass indexed by (phidec, s)
+ *
+ * Note:
+ * The output trajectory uses z = 0, i.e. the cloud center at ground level.
+ */
+void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *massreleased_per_ds_and_phidec, SEG *massreleased_per_ds){
 		int idz; //(phidec * sdim * zdim) + (s * zdim) + z
 		int phi;
 		double released;	// mass released in the s interval of the size fraction
@@ -3620,13 +3667,13 @@ void writetrajectory(int phiint, double *x, double *y, double *sig, double *r, S
 		for(int i = 0; i < SDIM_FOR_FALL_CALC; i++){
 			released = 0.0;
 			for(int gsize = 0; gsize < PHIDECDIM; gsize++){
-				released += r[i + gsize * SDIM_FOR_FALL_CALC];
+				released += massreleased_per_ds_and_phidec[i + gsize * SDIM_FOR_FALL_CALC];
 			}
 			
-			seg_ds[i].mass_from_ds[phiint] = released; 
+			massreleased_per_ds[i].mass_from_ds[phiint] = released; 
 			
 			idz = i * ZDIM;
-			if(WRITE_DEPCENT_TRAJECTORY) fprintf(outfile, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4e\n", i, x[idz], y[idz], x[idz] + VENT_EASTING, y[idz] + VENT_NORTHING, sig[idz], released);
+			if(WRITE_DEPCENT_TRAJECTORY) fprintf(outfile, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4e\n", i, cloud_center_x[idz], cloud_center_y[idz], cloud_center_x[idz] + VENT_EASTING, cloud_center_y[idz] + VENT_NORTHING, cloud_sigma2[idz], released);
 		}
 		if(WRITE_DEPCENT_TRAJECTORY) fclose(outfile);
 }

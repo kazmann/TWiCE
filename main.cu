@@ -37,7 +37,7 @@
 
 //#define TEPHRA2
 #define CUDA
-//#define TEST	//OUTPUT lspml.txt which is massloading contribution for each Location, particle Source, Phi in decimal
+//#define TEST	//OUTPUT massloading_loc_source_phi.txt which is massloading contribution for each Location, particle Source, Phi in decimal
 
 double  GRAVITY = 9.81;
 
@@ -172,13 +172,13 @@ void printsegregation_per_ds(SEG *r);
 void printxyz(FILE *in, const char *type, int i, double *srcX, double *srcY, double *srcZ);
 void printxyzq(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q, double *t);
 void printxyze(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q);
-void printfallsummary(const char *c, double *h, double *ttlfalltime_phiint, double base, int stepnumber, double stepdelta); // modified on 2024.07.28
-void printsegsummary(const char *c, double *massreleased_per_ds_and_phidec, double base, int stepnumber, double stepdelta);
+void write_vertical_profiles_for_phi(const char *c, double *h, double *ttlfalltime_phiint, double base, int stepnumber, double stepdelta); // modified on 2024.07.28
+void write_phi_s_table(const char *c, double *massreleased_per_ds_and_phidec, double base, int stepnumber, double stepdelta);
 
 
-void printttlml(int phiint, double *ttlml);
-void printlspml(int phiint, double *lspml);
-void printS4eachphidec(DEP *l, int phiint, double *lspml);
+void write_total_massloading(int phiint, double *ttlml);
+void write_massloading_loc_source_phi(int phiint, double *massloading_loc_source_phi);
+void write_massloading_per_phidec_at_locations(DEP *l, int phiint, double *massloading_loc_source_phi);
 
 int get_line_number(FILE *in_wind);
 int get_wind_line_number(FILE *in_wind);
@@ -186,15 +186,15 @@ void get_sdimcutoff(double *cloud_sigma2, SEG *massreleased_per_ds_and_phidec, i
 
 void atmosphere(int windlinenum, double *h, double *atmT, double *atmP, double *windX, double *windY, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres);
 void interval_fall_calc(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime);
-void writettlfallsummary(int phiint, double *ttlfalltime, double *ttlfalltime_phiint);
+void store_profile_for_phi(int phiint, double *ttlfalltime, double *ttlfalltime_phiint);
 void drift_from_a_certain_source(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2);
 void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double *cloud_center_y, double *sigma_squre, double *massreleased, SEG *seg);
 double calc_cloud_sigma2(double source_radius, double falltime);
 void mass_release_calc(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased);
 double confirm_released_mass(double *massreleased);
 void locwrite(DEP *l, double *locX, double *locY, double *locZ);
-void depwrite(int size, DEP *l, double *massloading);
-void sumwrite(DEP *l, double *ttlmassloading, double *cummassphi);
+void store_massloading_for_phi(int size, DEP *l, double *massloading);
+void store_total_massloading_and_mean_phi(DEP *l, double *ttlmassloading, double *cummassphi);
 void printdeposit(DEP *location_properties);
 void clearary(int dim, double *ary);
 int compare_ttlmassloading(const void *a, const void *b);
@@ -213,7 +213,7 @@ void read_wind(FILE *f, double *h, double *v, double *d, double *t, double *p);
 void read_loc(FILE *f, double *x, double *y, double *z);
 
 double plume_calculation(int linenum, double *sourceX, double *sourceY, double *sourceZ, double *sourceRadius, double *timeaftervent, double *wind_alt, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres);
-void rk(int, double);
+void advance_plume_state_rk4(int, double); // plume calculation using Runge-Kutta
 void makewindstruct(int imax, double *wind_alt, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres);
 
 double func12(double, double, double, double);
@@ -225,15 +225,15 @@ double func16(double, double, double, double);
 double func17(double, double, double, double);				// calc plume density
 double func18(double);				// particle content
 double func19(double);				// Rg calc
-double func20(double);				// Cp calc
+double calc_plume_heat_capacity(double);
 
-double calcCp0(void);			// Cp0 calc (eq. 20.5; in text between eq20 and 21)
+double calc_Cp0(void);			// Cp0 calc (eq. 20.5; in text between eq20 and 21)
 double calc_Tatm(double, int);
 double calc_Patm(double, int);
-double func22(double, double);	// pressure profile
-double func23(double, double);	// atmospheric density
-double get_V(double, int);
-double get_dir(double, int);
+double compute_pressure_gradient(double, double);	// pressure profile
+double compute_air_density(double, double);	// atmospheric density
+double interpolate_wind_speed(double, int);
+double interpolate_wind_direction_across_360(double, int);
 
 /* Non-Cuda Functions (start)*/
 void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *mlj, double *massreleased);
@@ -242,10 +242,10 @@ void calc_mass_loading_location(int phiint, double *mlj, double *massloading, do
 
 // CUDA function
 #ifdef CUDA
-void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *lspml, double *ttlml, double *massreleased);
-void cumulative_mass_x_phi(int phiint, double *lspml, double *massloading, double *ttl, double *cummassphi);
+void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *ttlml, double *massreleased);
+void accumulate_massloading_for_phi(int phiint, double *massloading, double *ttl, double *cummassphi);
 __global__ void funcD01a(int, int, int, int, float, float *, float *, float *, float *, float *, float *, float *, float *, float *, float *);
-__global__ void funcD01b(int N, int LOCDIM, float *lspmlD, float *ttlmlD);
+__global__ void funcD01b(int N, int LOCDIM, float *massloading_loc_source_phiD, float *ttlmlD);
 #endif
 
 //External in grain.c
@@ -289,7 +289,7 @@ void build_atmosphere_tables(int windlinenum, double Ht,
                              double **windX, double **windY,
                              int *zmax);
 
-void allocate_work_arrays(double **ttlfalltime, double **driftX, double **driftY,
+void allocate_woadvance_plume_state_rk4_arrays(double **ttlfalltime, double **driftX, double **driftY,
                           double **ttlfalltime_phiint,
                           double **ttldriftX_phiint,
                           double **ttldriftY_phiint,
@@ -371,7 +371,7 @@ void free_all(double *wind_alt, double *wind_v, double *wind_dir,
 
 // =========================
 // Main program
-// Orchestrates the simulation workflow:
+// Orchestrates the simulation woadvance_plume_state_rk4flow:
 // input → setup → compute → output → cleanup
 // =========================
 
@@ -467,7 +467,7 @@ int main(int argc, char *argv[]) {
 	* SDIM_FOR_FALL_CALC, and LOCDIM.
 	*/
 
-	// TODO: These arrays can be grouped into a SimulationWorkspace struct
+	// TODO: These arrays can be grouped into a SimulationWoadvance_plume_state_rk4space struct
 
 	// temporary arrays for fall time and drift during particle descent
 	// used inside the phi loop in calculate_massloading()
@@ -507,7 +507,7 @@ int main(int argc, char *argv[]) {
 	DEP *location_properties;
 	RELEASE *r;
 
-	allocate_work_arrays(
+	allocate_woadvance_plume_state_rk4_arrays(
 		&ttlfalltime, &driftX, &driftY,
 		&ttlfalltime_phiint, &ttldriftX_phiint, &ttldriftY_phiint,
 		&ttlfalltime_phidec, &ttldriftX_phidec, &ttldriftY_phidec,
@@ -558,17 +558,17 @@ int main(int argc, char *argv[]) {
 	/* 7.1. falltime and drift */
 	if(WRITE_FALL_INFO_FILES){	// DEFINED IN CONFIG FILE
 	const char *name1 = "falltime.txt";
-	printfallsummary(name1, h, ttlfalltime_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
+	write_vertical_profiles_for_phi(name1, h, ttlfalltime_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
 	const char *name2 = "falldriftX.txt";
-	printfallsummary(name2, h, ttldriftX_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
+	write_vertical_profiles_for_phi(name2, h, ttldriftX_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
 	const char *name3 = "falldriftY.txt";
-	printfallsummary(name3, h, ttldriftY_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
+	write_vertical_profiles_for_phi(name3, h, ttldriftY_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
 	printparticlereleased(r);			//particle_released.txt
 	printsegregation_per_ds(massreleased_per_ds); //segregation_per_ds.txt
 	}
 
 	/* 7.2. massloading and isopach */
-	sumwrite(location_properties, ttlmassloading, cummassphi);	//calculate mean diameter for each location
+	store_total_massloading_and_mean_phi(location_properties, ttlmassloading, cummassphi);	//calculate mean diameter for each location
 	if(WRITE_MASSLOADING){printdeposit(location_properties);		//massloading.txt
 	createisopachdata(location_properties);}						//S_vs_Area.txt
 	
@@ -853,7 +853,7 @@ void build_plume_and_sources(
 }
 
 /*
- * Allocate working arrays used in the main mass-loading calculation.
+ * Allocate woadvance_plume_state_rk4ing arrays used in the main mass-loading calculation.
  *
  * These arrays store temporary fall/drift profiles, per-phi summaries,
  * particle release distributions, cloud-center positions, cloud dispersion,
@@ -870,7 +870,7 @@ void build_plume_and_sources(
  * Arrays are allocated here only. Their physical meanings are documented
  * at their declarations in main() and in the functions where they are used.
  */
-void allocate_work_arrays(
+void allocate_woadvance_plume_state_rk4_arrays(
     double **ttlfalltime,
     double **driftX,
     double **driftY,
@@ -1063,9 +1063,9 @@ void calculate_massloading(
 			
 			// 2. Store results for decimal phi classes (phidec) and integer phi classes
 			//    Map ttlfalltime[z] and driftXY[z] to ttlfalltime_phidec[z, phidec] and ttldriftXYphidec[z, phidec]
-			writettlfallsummary(phidecimal, ttlfalltime, ttlfalltime_phidec);
-			writettlfallsummary(phidecimal, driftX, ttldriftX_phidec);
-			writettlfallsummary(phidecimal, driftY, ttldriftY_phidec);
+			store_profile_for_phi(phidecimal, ttlfalltime, ttlfalltime_phidec);
+			store_profile_for_phi(phidecimal, driftX, ttldriftX_phidec);
+			store_profile_for_phi(phidecimal, driftY, ttldriftY_phidec);
 			
 			/*printf("grainsize = %1.4e m\n", grainsize);
 			for(int t = 0; t < ZDIM; t++){
@@ -1075,9 +1075,9 @@ void calculate_massloading(
 			
 			// output 1 phi interval fallout
 			if(phidecimal == 0){
-				writettlfallsummary(phiint, ttlfalltime, ttlfalltime_phiint);
-				writettlfallsummary(phiint, driftX, ttldriftX_phiint);
-				writettlfallsummary(phiint, driftY, ttldriftY_phiint);
+				store_profile_for_phi(phiint, ttlfalltime, ttlfalltime_phiint);
+				store_profile_for_phi(phiint, driftX, ttldriftX_phiint);
+				store_profile_for_phi(phiint, driftY, ttldriftY_phiint);
 			}
 			/* 3. Compute particle release (segregation) along the plume axis */
 			mass_release_calc(zmax, phidecimal, phi, h, atmP, atmT, windX, windY, massreleased_per_ds_and_phidec);
@@ -1092,16 +1092,16 @@ void calculate_massloading(
 		// 20240728 output 0.1 phi interval fallout to each 1 phi interval file
 		if(WRITE_DECIMAL_FALL_TRAJ){
 			sprintf(string, "decimal_falltime_%1.0f.txt", phiint + MAX_GRAINSIZE + 1);
-			printfallsummary(string, h, ttlfalltime_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
+			write_vertical_profiles_for_phi(string, h, ttlfalltime_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
 			sprintf(string, "decimal_falldriftX_%1.0f.txt", phiint + MAX_GRAINSIZE + 1);
-			printfallsummary(string, h, ttldriftX_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
+			write_vertical_profiles_for_phi(string, h, ttldriftX_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
 			sprintf(string, "decimal_falldriftY_%1.0f.txt", phiint + MAX_GRAINSIZE + 1);
-			printfallsummary(string, h, ttldriftY_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);	
+			write_vertical_profiles_for_phi(string, h, ttldriftY_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);	
 		}  // 20240728 END
 		
 		if(WRITE_FALL_INFO_FILES){
 			sprintf(string, "particle_segregation_%1.0f.txt", phiint + MAX_GRAINSIZE + 1);
-			printsegsummary(string, massreleased_per_ds_and_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
+			write_phi_s_table(string, massreleased_per_ds_and_phidec, phiint + MAX_GRAINSIZE + 1, PHIDECDIM, INTERVAL_DECIMAL_PHI);
 		}
 
 		r[phiint].phi = phiint + MAX_GRAINSIZE + 1;
@@ -1113,26 +1113,25 @@ void calculate_massloading(
 		
 		// 6. Compute mass loading at ground locations
 		if(SDIMCUTOFF > 0){
-			double *lspml; // lspml stands for "local-s-phi mass loading"
-						   // =  massloading data for each combination of location, s (position in plume) and phi (grain size, decimal phi)
-			lspml = (double*)calloc(PHIDECDIM * SDIMCUTOFF * LOCDIM, sizeof(double));
+			double *massloading_loc_source_phi; // =  massloading data for each combination of location, s (position in plume) and phi (grain size, decimal phi)
+			massloading_loc_source_phi = (double*)calloc(PHIDECDIM * SDIMCUTOFF * LOCDIM, sizeof(double));
 		
 #ifdef CUDA
-			calc_mass_loading(sourceZ, cloud_center_x, cloud_center_y, cloud_sigma2, locX, locY, locZ, lspml, tmpmassloading, massreleased_per_ds_and_phidec);
-			cumulative_mass_x_phi(phiint, lspml, tmpmassloading, ttlmassloading, cummassphi);
+			calc_mass_loading(sourceZ, cloud_center_x, cloud_center_y, cloud_sigma2, locX, locY, locZ, massloading_loc_source_phi, tmpmassloading, massreleased_per_ds_and_phidec);
+			accumulate_massloading_for_phi(phiint, tmpmassloading, ttlmassloading, cummassphi);
 #else
-			calc_mass_loading_element(phisize, sourceZ, cloud_center_x, cloud_center_y, cloud_sigma2, locX, locY, locZ, lspml, massreleased_per_ds_and_phidec);
-			calc_mass_loading_location(phiint, lspml, tmpmassloading, ttlmassloading, cummassphi);
+			calc_mass_loading_element(phisize, sourceZ, cloud_center_x, cloud_center_y, cloud_sigma2, locX, locY, locZ, massloading_loc_source_phi, massreleased_per_ds_and_phidec);
+			calc_mass_loading_location(phiint, massloading_loc_source_phi, tmpmassloading, ttlmassloading, cummassphi);
 #endif
 			
 #ifdef TEST
-			printlspml(phiint, lspml);
+			void write_massloading_loc_source_phi(phiint, massloading_loc_source_phi);
 #endif
-			if(WRITE_DECIMAL_MASSLOADING){printS4eachphidec(location_properties, phiint, lspml);}
-			free(lspml);
+			if(WRITE_DECIMAL_MASSLOADING){write_massloading_per_phidec_at_locations(location_properties, phiint, massloading_loc_source_phi);}
+			free(massloading_loc_source_phi);
 		}
 		
-		depwrite(phiint, location_properties, tmpmassloading);
+		store_massloading_for_phi(phiint, location_properties, tmpmassloading);
 		clearary(LOCDIM, tmpmassloading);
 		
 	}// END OF INTEGER PHI LOOP
@@ -1145,7 +1144,7 @@ void calculate_massloading(
  * - input data arrays
  * - plume and source arrays
  * - atmospheric profiles
- * - working arrays for fall, drift, and mass loading
+ * - woadvance_plume_state_rk4ing arrays for fall, drift, and mass loading
  * - location properties and release data structures
  *
  * Centralizing deallocation helps prevent memory leaks and
@@ -1294,49 +1293,100 @@ void set_source_points_on_plume(double *sourceX, double *sourceY, double *source
 	}
 }
 
-void writettlfallsummary(int phiint, double *ttlfalltime, double *ttlfalltime_phiint){
-	for(int z = 0; z < ZDIM; z++){
-		ttlfalltime_phiint[z + phiint * ZDIM] = ttlfalltime[z];
-	}
+/*
+ * Store 1D vertical profile into a 2D array indexed by (phi, z).
+ *
+ * Copies:
+ *   src[z] → dst[phi, z]
+ *
+ * Used for fall time, drift, and other height-dependent quantities.
+ */
+void store_profile_for_phi(int phiint, double *src, double *dst){
+    for(int z = 0; z < ZDIM; z++){
+        dst[z + phiint * ZDIM] = src[z];
+    }
 }
 
-void printfallsummary(const char *c, double *h, double *ttlfalltime_phiint, double base, int stepnum, double stepdelta){
-	FILE *outfile;
-	outfile = fopen(c, "w");
+/*
+ * Write vertical profiles indexed by (phi, z).
+ *
+ * Outputs a table where:
+ * - rows correspond to height index z
+ * - columns correspond to phi classes
+ *
+ * Data layout:
+ *   profile_by_phi[z + phi * ZDIM]
+ *
+ * Used for fall time, drift, and other height-dependent quantities.
+ */
+void write_vertical_profiles_for_phi(
+    const char *filename,
+    double *h,
+    double *profile_by_phi,
+    double base,
+    int stepnum,
+    double stepdelta
+){
+    FILE *outfile = fopen(filename, "w");
 
-	fprintf(outfile, "z\th(m)");
-	for(int phiint = 0; phiint < stepnum; phiint++){
-		fprintf(outfile, "\tphi%1.1f", base - phiint * stepdelta);
-	}
-	fprintf(outfile, "\n");
-	for(int z = ZDIM - 1; z >= 0; z--){
-		fprintf(outfile, "%d\t%1.1f", z, h[z]);
-		for(int phiint = 0; phiint < stepnum; phiint++){
-			fprintf(outfile, "\t%1.4f", ttlfalltime_phiint[z + phiint * ZDIM]);
-		}
-		fprintf(outfile, "\n");
-	}
-	fclose(outfile);
+    // write header
+    fprintf(outfile, "z\th(m)");
+    for(int phiint = 0; phiint < stepnum; phiint++){
+        fprintf(outfile, "\tphi%1.1f", base - phiint * stepdelta);
+    }
+    fprintf(outfile, "\n");
+
+    // write data (top → bottom)
+    for(int z = ZDIM - 1; z >= 0; z--){
+        fprintf(outfile, "%d\t%1.1f", z, h[z]);
+        for(int phiint = 0; phiint < stepnum; phiint++){
+            fprintf(outfile, "\t%1.4f", profile_by_phi[z + phiint * ZDIM]);
+        }
+        fprintf(outfile, "\n");
+    }
+
+    fclose(outfile);
 }
 
-void printsegsummary(const char *c, double *massreleased_perds_and_phidec, double base, int stepnum, double stepdelta){
-	FILE *outfile;
-	outfile = fopen(c, "w");
+/*
+ * Write (phi, s) table of mass release per source point.
+ *
+ * Outputs a table where:
+ * - rows correspond to source index s
+ * - columns correspond to phi classes
+ *
+ * Data layout:
+ *   data[s + phi * SDIM]
+ */
+void write_phi_s_table(
+    const char *filename,
+    double *massrelease_by_phi_and_source,
+    double base,
+    int stepnum,
+    double stepdelta
+){
+    FILE *outfile = fopen(filename, "w");
 
-	fprintf(outfile, "i");
-	for(int phiint = 0; phiint < stepnum; phiint++){
-		fprintf(outfile, "\tphi%1.1f", base - phiint * stepdelta);
-	}
-	fprintf(outfile, "\n");
-	for(int i = 0; i < SDIM_FOR_FALL_CALC; i++){
-		fprintf(outfile, "%d", i);
-		for(int phiint = 0; phiint < stepnum; phiint++){
-			fprintf(outfile, "\t%1.4f", massreleased_perds_and_phidec[i + phiint * SDIM_FOR_FALL_CALC]);
-		}
-		fprintf(outfile, "\n");
-	}
-	fclose(outfile);
+    // header
+    fprintf(outfile, "s");
+    for(int phiint = 0; phiint < stepnum; phiint++){
+        fprintf(outfile, "\tphi%1.1f", base - phiint * stepdelta);
+    }
+    fprintf(outfile, "\n");
+
+    // data
+    for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
+        fprintf(outfile, "%d", s);
+        for(int phiint = 0; phiint < stepnum; phiint++){
+            fprintf(outfile, "\t%1.4f",
+                massrelease_by_phi_and_source[s + phiint * SDIM_FOR_FALL_CALC]);
+        }
+        fprintf(outfile, "\n");
+    }
+
+    fclose(outfile);
 }
+
 
 double confirm_released_mass(double *massreleased_per_ds_and_phidec){
 	double totalofthefraction = 0.0;
@@ -1422,7 +1472,7 @@ idx_ps(int phidec, int s, int sdim)
 
 // Structures
 typedef struct {
-    float *lspmlD;
+    float *massloading_loc_source_phiD;
     float *ttlmlD;
 
     float *sourceZD;
@@ -1468,7 +1518,7 @@ typedef struct {
 /* 3. Device Buffer Allocation */
 static void allocate_device_buffers_struct(Buffers *b, int chunk_locdim)
 {
-    CUDA_CHECK(cudaMalloc((void**)&b->device.lspmlD,
+    CUDA_CHECK(cudaMalloc((void**)&b->device.massloading_loc_source_phiD,
         b->LSP * sizeof(float)));
 
     CUDA_CHECK(cudaMalloc((void**)&b->device.ttlmlD,
@@ -1634,7 +1684,7 @@ static void launch_mass_loading_kernels_buffers(
 
     funcD01a<<<grid, block>>>(
         N, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
-        b->device.lspmlD,
+        b->device.massloading_loc_source_phiD,
         b->device.ttlmlD,
         b->device.sourceZD,
         b->device.centXD,
@@ -1652,7 +1702,7 @@ static void launch_mass_loading_kernels_buffers(
     funcD01b<<<grid2, block>>>(
         N,
         locN,
-        b->device.lspmlD,
+        b->device.massloading_loc_source_phiD,
         b->device.ttlmlD
     );
     CUDA_KERNEL_CHECK();
@@ -1700,7 +1750,7 @@ static void cleanup_buffers(Buffers *b)
 	CUDA_CHECK(cudaFree(b->device.sigsqD));
 	CUDA_CHECK(cudaFree(b->device.massreleasedD));
 
-	CUDA_CHECK(cudaFree(b->device.lspmlD));
+	CUDA_CHECK(cudaFree(b->device.massloading_loc_source_phiD));
 	CUDA_CHECK(cudaFree(b->device.ttlmlD));
 }
 /* end of 10b */
@@ -1763,7 +1813,7 @@ static void compute_mass_loading(
  * Note:
  * Computation is performed in chunks over locations for memory efficiency.
  */
-void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *lspml, double *ttlml, double *massreleased){
+void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *ttlml, double *massreleased){
 	/* 
 	* D in the name of parameter (e.g. ttlmlD) comes from "Device", which means such parameters
 	* are used in GPU calculation
@@ -1882,7 +1932,7 @@ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_ce
  *
  * Each CUDA thread computes one flattened element of:
  *
- *     lspmlD[location, source, phidec]
+ *     massloading_loc_source_phiD[location, source, phidec]
  *
  * Flattened layout:
  *
@@ -1894,7 +1944,7 @@ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_ce
  * @param sdim Number of source points
  * @param phidecdim Number of grain-size subdivisions
  * @param zdelta Vertical grid spacing
- * @param lspmlD Output partial mass loading per location/source/phi
+ * @param massloading_loc_source_phiD Output partial mass loading per location/source/phi
  * @param ttlmlD Output total mass loading buffer, used by funcD01b
  * @param sourceZD Source height array
  * @param centX Deposit center X array indexed by (phidec, source, z)
@@ -1911,7 +1961,7 @@ __global__ void funcD01a(
     int sdim,
     int phidecdim,
     float zdelta,
-    float *lspmlD,
+    float *massloading_loc_source_phiD,
     float *ttlmlD,
     float *sourceZD,
     float *centX,
@@ -1928,7 +1978,7 @@ __global__ void funcD01a(
     unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
 
     if(tid < N){
-        lspmlD[tid] = 0.0f;
+        massloading_loc_source_phiD[tid] = 0.0f;
 
         /*
          * Decode flattened thread index.
@@ -1989,14 +2039,14 @@ __global__ void funcD01a(
          */
         if(locZ[j] < sourceZD[s]){
             /* Original formulation: Bonadonna et al. (2005) */
-            lspmlD[tid] =
+            massloading_loc_source_phiD[tid] =
                 1 / (M_2PI * sigma2)
                 * exp(-square_distance / (2 * sigma2))
                 * massreleased[ips];
 
 #ifdef TEPHRA2
             /* Formulation used in Tephra2 and WT */
-            lspmlD[tid] =
+            massloading_loc_source_phiD[tid] =
                 1 / (M_PI * sigma2)
                 * exp(-square_distance / sigma2)
                 * massreleased[ips];
@@ -2018,22 +2068,22 @@ __global__ void funcD01a(
  *
  * funcD01a produces:
  *
- *     lspmlD[location, source, phidec]
+ *     massloading_loc_source_phiD[location, source, phidec]
  *
  * This kernel sums all source/phi contributions for each location:
  *
  *     ttlmlD[location] = sum over source and phidec
  *
- * @param N Total number of flattened lspmlD elements:
+ * @param N Total number of flattened massloading_loc_source_phiD elements:
  *          locdim * sdim * phidecdim
  * @param locdim Number of locations in the current chunk
- * @param lspmlD Partial mass loading array
+ * @param massloading_loc_source_phiD Partial mass loading array
  * @param ttlmlD Output total mass loading per location
  */
 __global__ void funcD01b(
     int N,
     int locdim,
-    float *lspmlD,
+    float *massloading_loc_source_phiD,
     float *ttlmlD
 ){
     unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -2044,15 +2094,19 @@ __global__ void funcD01b(
         ttlmlD[tid] = 0.0f;
 
         for(int i = 0; i < n_per_location; i++){
-            ttlmlD[tid] += lspmlD[tid * n_per_location + i];
+            ttlmlD[tid] += massloading_loc_source_phiD[tid * n_per_location + i];
         }
     }
 }
 
-// D01b
-// Calculate mass loading on a certain grain size on a certain point on the ground.
-// All grainsizes and sources are summed up from the "elements", which is calculated by D01a.
-void cumulative_mass_x_phi(int phiint, double *lspml, double *tmp, double *ttl, double *cummassphi){
+/*
+ * Accumulate mass loading for the current integer phi class.
+ *
+ * For each ground location j:
+ * - add current-phi mass loading to total mass loading
+ * - accumulate mass-weighted phi (tmp * phi) for later mean grain-size calculation
+ */
+void accumulate_massloading_for_phi(int phiint, double *tmp, double *ttl, double *cummassphi){
 	double phi;
 
 	for(int j = 0; j < LOCDIM; j++){
@@ -2066,7 +2120,7 @@ void cumulative_mass_x_phi(int phiint, double *lspml, double *tmp, double *ttl, 
 /* NON CUDA FUNCTIONS (START)*/
 // D01a
 // Calculate mass loading of a certain grain size on a certain point on the ground (Sloc) from a certain source: Sloc(phi, s)
-void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *lspml, double *massreleased){
+void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *massreleased){
 	int j, s, phidec, z;
 	int ips;    // counter for arrays having grainsize(phidec) - plumelength(s; non cut off) order such as massreleased
 	int ipsz;	// counter for arrays having grainsize(phidec) - plumelength(s; non cut off) - height(z) order such as cloud_center_x 
@@ -2095,11 +2149,11 @@ void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_cente
 			sigma2 = cloud_sigma2[ipsz+1] + (cloud_sigma2[ipsz] - cloud_sigma2[ipsz+1]) * (Z_DELTA * (z + 1) - locZ[j]) / Z_DELTA;
 			square_distance = pow((depcentX - locX[j]), 2) + pow((depcentY - locY[j]), 2);
 			
-			lspml[idx] = 1 / (M_2PI * sigma2) * exp(-square_distance / (2 * sigma2)) * massreleased[ips];
+			massloading_loc_source_phi[idx] = 1 / (M_2PI * sigma2) * exp(-square_distance / (2 * sigma2)) * massreleased[ips];
 #ifdef TEPHRA2
-			lspml[idx] = 1 / (M_PI * sigma2) * exp(-square_distance / (sigma2)) * massreleased[ips];	// Formulation used in Tephra2 and WT
+			massloading_loc_source_phi[idx] = 1 / (M_PI * sigma2) * exp(-square_distance / (sigma2)) * massreleased[ips];	// Formulation used in Tephra2 and WT
 #endif
-			//if(j == 0 && phidec == 0){fprintf(outfile, "%d\t%d\t%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.6e\t%1.6e\t%1.6e\n", idx, s, j, phisize - phidec * 0.1, depcentX, depcentY, sourceZ[s], depcentX - locX[j], depcentY - locY[j], sigma2, square_distance, lspml[idx], massreleased[ips]);}
+			//if(j == 0 && phidec == 0){fprintf(outfile, "%d\t%d\t%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.6e\t%1.6e\t%1.6e\n", idx, s, j, phisize - phidec * 0.1, depcentX, depcentY, sourceZ[s], depcentX - locX[j], depcentY - locY[j], sigma2, square_distance, massloading_loc_source_phi[idx], massreleased[ips]);}
 		}
 	}
 } // End of the function
@@ -2107,16 +2161,16 @@ void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_cente
 // D01b
 // Calculate mass loading on a certain grain size on a certain point on the ground.
 // All grainsizes and sources are summed up from the "elements", which is calculated by D01a.
-void calc_mass_loading_location(int phiint, double *lspml, double *massloading, double *ttl, double *cummassphi){
+void calc_mass_loading_location(int phiint, double *massloading_loc_source_phi, double *massloading, double *ttl, double *cummassphi){
 	int idx;
 	double phi;
 
 	for(int j = 0; j < LOCDIM; j++){
 		for(idx = PHIDECDIM * SDIMCUTOFF * j; idx < PHIDECDIM * SDIMCUTOFF * (j + 1); idx++){
 			phi = phiint + MAX_GRAINSIZE + 1; // - phidec * INTERVAL_DECIMAL_PHI;
-			massloading[j] += lspml[idx];
-			ttl[j] += lspml[idx];
-			cummassphi[j] += lspml[idx] * phi;
+			massloading[j] += massloading_loc_source_phi[idx];
+			ttl[j] += massloading_loc_source_phi[idx];
+			cummassphi[j] += massloading_loc_source_phi[idx] * phi;
 		}
 	}
 	//printf("LINE302 j = %d\n", j);
@@ -2216,7 +2270,7 @@ void locwrite(DEP *location_properties, double *locX, double *locY, double *locZ
  * This function is intended to be called inside the phi loop,
  * so that mass loading is accumulated for each phi class.
  */
-void depwrite(int size, DEP *location_properties, double *loading){
+void store_massloading_for_phi(int size, DEP *location_properties, double *loading){
 	int phi;
 	phi = size + MAX_GRAINSIZE + 1;
 	
@@ -2226,8 +2280,17 @@ void depwrite(int size, DEP *location_properties, double *loading){
 	}
 }
 
-
-void sumwrite(DEP *location_properties, double *ttlmassloading, double *cummassphi){
+/*
+ * Store total mass loading and mean grain size at each location.
+ *
+ * For each ground location j:
+ * - assign total mass loading (ttlmassloading)
+ * - compute mean grain size (in phi) as mass-weighted average:
+ *     mean phi = cummassphi / ttlmassloading
+ *
+ * If total mass loading is zero, mean diameter is set to -9999.
+ */
+void store_total_massloading_and_mean_phi(DEP *location_properties, double *ttlmassloading, double *cummassphi){
 	for(int j = 0; j < LOCDIM; j++){
 		location_properties[j].ttlmassloading = ttlmassloading[j];
 		if(ttlmassloading[j] > 0){
@@ -2289,8 +2352,8 @@ void atmosphere(int windlinenum, double *h, double *atmT, double *atmP, double *
 		}else{
 		atmT[z] = calc_Tatm(h[z], windlinenum);
 		atmP[z] = calc_Patm(h[z], windlinenum);
-		v = get_V(h[z], windlinenum);
-		dir = get_dir(h[z], windlinenum);
+		v = interpolate_wind_speed(h[z], windlinenum);
+		dir = interpolate_wind_direction_across_360(h[z], windlinenum);
 		vary[z] = v;
 		dirary[z] = dir;
 		windY[z] = v * cos(dir / 360 * 2 * M_PI);
@@ -3111,8 +3174,27 @@ double gz, gs;
 double ta, dp_over_dz;
 double smax;
 
-//////////////////
 
+/*
+ * Compute plume trajectory and source-point properties.
+ *
+ * This is the main plume calculation routine.
+ * Starting from vent conditions, the plume state is advanced step by step
+ * along the plume axis using advance_plume_state_rk4().
+ *
+ * At each step:
+ * - plume state variables (Q, M, theta, E, etc.) are updated
+ * - atmospheric conditions are interpolated from input data
+ * - plume position and properties are stored as source points
+ *
+ * The integration continues until plume rise stops (theta <= 0 or M <= 0),
+ * and the plume top height Ht is determined.
+ *
+ * Outputs:
+ * - plume centerline trajectory
+ * - source-point positions and properties for particle calculations
+ * - plume height Ht
+ */
 double plume_calculation(int imax, double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *taftervent, double *wind_alt, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres){	// The main routine in this file
 	int i = 0;
 	int total = imax; // total line number of wind file
@@ -3146,9 +3228,9 @@ double plume_calculation(int imax, double *sourceX, double *sourceY, double *sou
 
 	ta = calc_Tatm(gz, total);
 	p = calc_Patm(gz, total);
-	Cp0 = calcCp0();	// func 20.5
+	Cp0 = calc_Cp0();
 
-	rho_a = func23(p, ta);
+	rho_a = compute_air_density(p, ta);
 	n=n0;
 
 	Rg=Rg0;
@@ -3196,8 +3278,8 @@ double plume_calculation(int imax, double *sourceX, double *sourceY, double *sou
 
 	Cp = Cp0;
 
-	V = get_V(gz, total);		// wind velocity
-	g_dir = get_dir(gz, total);	// wind direction
+	V = interpolate_wind_speed(gz, total);		// wind velocity
+	g_dir = interpolate_wind_direction_across_360(gz, total);	// wind direction
 	x = 0.0;
 	north = 0.0;
 	east = 0.0;
@@ -3231,7 +3313,7 @@ double plume_calculation(int imax, double *sourceX, double *sourceY, double *sou
 		Q_previous = Q; Cp_previous = Cp; Rg_previous = Rg; V_previous = V; M_previous = M; //theta_previous = theta;
 		U_previous = U; R_previous = R; T_previous = T;
 		
-		rk(total, T);
+		advance_plume_state_rk4(total, T);
 		time_after_vent += ds / ((U_previous + U) / 2);
 		taftervent[i] = time_after_vent;
 		
@@ -3272,7 +3354,7 @@ double plume_calculation(int imax, double *sourceX, double *sourceY, double *sou
     gs = gs - ds;
 
 	// Print out plume parameters after reaching Hb
-	V = get_V(Ht, total);
+	V = interpolate_wind_speed(Ht, total);
 	while (i < SDIM_FOR_PLUME_CALC){
 		gs = gs + ds;
 		x += ds * cos(theta);
@@ -3297,7 +3379,23 @@ double plume_calculation(int imax, double *sourceX, double *sourceY, double *sou
 	return(Ht);
 }
 
-void rk(int total, double T){
+/*
+ * Advance plume state by one step using 4th-order Runge-Kutta (RK4).
+ *
+ * This function integrates the governing plume equations along the
+ * trajectory coordinate s, updating:
+ *   Q      : mass flux
+ *   M      : momentum flux
+ *   theta  : plume angle
+ *   E      : energy flux
+ *
+ * At each RK stage, atmospheric conditions (pressure, temperature,
+ * wind speed/direction) are interpolated based on height.
+ *
+ * The plume properties (density, velocity, radius, etc.) are updated
+ * consistently with the current state.
+ */
+void advance_plume_state_rk4(int total, double T){
 	//double dp_over_ds, dQ_over_ds, dM_over_ds, dtheta_over_ds, dE_over_ds;
 	//double dp_over_ds1, dQ_over_ds1, dM_over_ds1, dtheta_over_ds1, dE_over_ds1;
 	//double dp_over_ds2, dQ_over_ds2, dM_over_ds2, dtheta_over_ds2, dE_over_ds2;
@@ -3317,7 +3415,7 @@ void rk(int total, double T){
 
 	/////////////////////////////////
 	// k1     ///////////////////////
-	//dp_over_ds1 = func22(p, ta);
+	//dp_over_ds1 = compute_pressure_gradient(p, ta);
 	dQ_over_ds1 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
 	dM_over_ds1 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
 	dtheta_over_ds1 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
@@ -3338,11 +3436,11 @@ void rk(int total, double T){
 	n = func18(Q_tmp);				// calc n
 	p_tmp = calc_Patm(gz+ dz, total);
 	ta = calc_Tatm(gz+ dz, total);
-	rho_a_tmp = func23(p_tmp, ta);
+	rho_a_tmp = compute_air_density(p_tmp, ta);
 
-	Cp = func20(n);					// calc Cp
+	Cp = calc_plume_heat_capacity(n);					// calc Cp
 	//printf("k1\n");
-	V  = get_V(gz+ dz, total);
+	V  = interpolate_wind_speed(gz+ dz, total);
 
 	T = E_tmp / Q_tmp / Cp;
 
@@ -3355,7 +3453,7 @@ void rk(int total, double T){
 
 	/////////////////////////////////
 	// k2     ///////////////////////
-	//dp_over_ds2 = func22(p_tmp, ta);
+	//dp_over_ds2 = compute_pressure_gradient(p_tmp, ta);
 	dQ_over_ds2 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
 	dM_over_ds2 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
 	dtheta_over_ds2 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
@@ -3376,11 +3474,11 @@ void rk(int total, double T){
 	n = func18(Q_tmp);				// calc n
 	p_tmp = calc_Patm(gz+ dz, total);
 	ta = calc_Tatm(gz+ dz, total);
-	rho_a_tmp = func23(p_tmp, ta);
+	rho_a_tmp = compute_air_density(p_tmp, ta);
 
-	Cp = func20(n);					// calc Cp
+	Cp = calc_plume_heat_capacity(n);					// calc Cp
 	//printf("k2\n");
-	V = get_V(gz+ dz, total);
+	V = interpolate_wind_speed(gz+ dz, total);
 
 	T = E_tmp / Q_tmp / Cp;
 
@@ -3393,7 +3491,7 @@ void rk(int total, double T){
 
 	/////////////////////////////////
 	// k3     ///////////////////////
-	//dp_over_ds3 = func22(p_tmp, ta);
+	//dp_over_ds3 = compute_pressure_gradient(p_tmp, ta);
 	dQ_over_ds3 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
 	dM_over_ds3 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
 	dtheta_over_ds3 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
@@ -3414,11 +3512,11 @@ void rk(int total, double T){
 	n = func18(Q_tmp);				// calc n
 	p_tmp = calc_Patm(gz+ dz, total);
 	ta = calc_Tatm(gz+ dz, total);
-	rho_a_tmp = func23(p_tmp, ta);
+	rho_a_tmp = compute_air_density(p_tmp, ta);
 
-	Cp = func20(n);					// calc Cp
+	Cp = calc_plume_heat_capacity(n);					// calc Cp
 	//printf("k3\n");
-	V = get_V(gz+ dz, total);
+	V = interpolate_wind_speed(gz+ dz, total);
 
 	T = E_tmp / Q_tmp / Cp;
 
@@ -3431,7 +3529,7 @@ void rk(int total, double T){
 
 	/////////////////////////////////
 	// k4     ///////////////////////
-	//dp_over_ds4 = func22(p_tmp, ta);
+	//dp_over_ds4 = compute_pressure_gradient(p_tmp, ta);
 	dQ_over_ds4 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
 	dM_over_ds4 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
 	dtheta_over_ds4 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
@@ -3470,12 +3568,12 @@ void rk(int total, double T){
 	n = func18(Q);				// calc n
 	p = calc_Patm(gz, total);
 	ta = calc_Tatm(gz, total);
-	rho_a = func23(p, ta);
+	rho_a = compute_air_density(p, ta);
 
-	Cp = func20(n);					// calc Cp
+	Cp = calc_plume_heat_capacity(n);					// calc Cp
 	//printf("k4\n");
-	V = get_V(gz, total);
-	g_dir = get_dir(gz, total);
+	V = interpolate_wind_speed(gz, total);
+	g_dir = interpolate_wind_direction_across_360(gz, total);
 
 
 
@@ -3571,25 +3669,47 @@ double func19(double n_tmp){
 	return Rg_tmp;
 }
 
-double func20(double n_tmp){
+/*
+ * Compute mixture heat capacity Cp for a given gas fraction n.
+ * (Equation 20 in Woodhouse et al.)
+ *
+ * Cp is linearly interpolated between:
+ * - Ca : heat capacity of air
+ * - Cp0: initial mixture heat capacity
+ *
+ * using gas fraction n:
+ *
+ *   Cp = Ca + (Cp0 - Ca) * (1 - n) / (1 - n0)
+ */
+double calc_plume_heat_capacity(double n_tmp){
 	double Cp_tmp;
 	Cp_tmp = Ca + (Cp0 - Ca) * (1 - n_tmp) / (1 - n0);
 
 	return Cp_tmp;
 }
 
-double calcCp0(){
-	double Cp0_tmp;
-	Cp0_tmp = n0 * Cv + (1 - n0) * Cs;
-	return Cp0_tmp;
+/*
+ * Compute mixture initial specific heat capacity of plume (Cp0).
+ *
+ * n0 = initial gas fraction
+ * Cv = specific heat capacity of water vapor
+ * Cs = specific heat capacity of solid pyroclast
+ */
+double calc_Cp0(){
+	return n0 * Cv + (1 - n0) * Cs;
 }
 
-
-double calc_Tatm(double h, int total){	//return wind velocity based on discrete wind data
+/*
+ * Interpolate atmospheric temperature at height h
+ * from discrete atmospheric data.
+ *
+ * Linear interpolation is used between adjacent height levels.
+ * If h is above the highest level, the temperature at the highest
+ * level is returned.
+ */
+double calc_Tatm(double h, int total){
 	int i=1;
-	double t_atm=9999.9;
-
-	t_atm=W1[total-1].t_atm;
+	double t_atm = W1[total-1].t_atm;
 
 	while(i<total){
 		if(h < W1[i].wind_height){
@@ -3602,15 +3722,24 @@ double calc_Tatm(double h, int total){	//return wind velocity based on discrete 
 	return t_atm;
 }
 
-double calc_Patm(double h, int total){	//return wind velocity based on discrete wind data
+/*
+ * Estimate atmospheric pressure at height h from discrete atmospheric data.
+ *
+ * Temperature is linearly interpolated between input height levels.
+ * Pressure is then estimated from the pressure at the lower level
+ * using a hydrostatic approximation with the mean temperature
+ * between the lower level and height h.
+ *
+ * Input pressure is assumed to be in hPa and converted to Pa.
+ */
+double calc_Patm(double h, int total){
 	int i=1;
-	double t_atm0=9999.9, t_atm=9999.9;
-	double p_atm0=9999.9, p_atm=9999.9;
+	double p_atm;
 	double a;
 
-	t_atm=W1[total-1].t_atm;
-	t_atm0=W1[total-1].t_atm;
-	p_atm0=W1[total-1].p_atm;
+	double t_atm = W1[total-1].t_atm;
+	double t_atm0 = W1[total-1].t_atm;
+	double p_atm0 = W1[total-1].p_atm;
 
 	while(i<total){
 		if(h < W1[i].wind_height){
@@ -3628,24 +3757,41 @@ double calc_Patm(double h, int total){	//return wind velocity based on discrete 
 	return p_atm;
 }
 
-double func22(double p_tmp, double t_tmp){	// atmospheric pressure
+/*
+ * Compute vertical pressure gradient under hydrostatic balance.
+ * (Equation 22 in Woodhouse et al.)
+ *
+ *   dp/ds = - (g * p) / (R * T)
+ */
+double compute_pressure_gradient(double p_tmp, double t_tmp){	// atmospheric pressure
 	double dp_over_ds;
 
 	dp_over_ds = -1 * (GRAVITY * p_tmp) / (Ra * t_tmp);
 	return dp_over_ds;
 }
 
-double func23(double p_tmp, double t_tmp){	// atmospheric density
+/*
+ * Compute air density using the ideal gas law.
+ * (Equation 23 in Woodhouse et al.)
+ *
+ *   rho = p / (R * T)
+ */
+double compute_air_density(double p_tmp, double t_tmp){	// atmospheric density
 	double rho_tmp;
 
 	rho_tmp = p_tmp / (Ra * t_tmp);
 	return rho_tmp;
 }
 
-
-double get_V(double h, int total){	//return wind velocity based on discrete wind data
+/*
+ * Interpolate wind speed at height h from discrete wind data.
+ *
+ * If h is above the highest wind-data level, the wind speed at the
+ * highest level is returned.
+ */
+double interpolate_wind_speed(double h, int total){	//return wind velocity based on discrete wind data
 	int i=1;
-	double v=9999.9;
+	double v;
 
 	v=W1[total-1].wind_speed;
 
@@ -3660,9 +3806,18 @@ double get_V(double h, int total){	//return wind velocity based on discrete wind
 	return v;
 }
 
-double get_dir(double h, int total){	//return wind direction based on discrete wind data
+/*
+ * Interpolate wind direction at height h from discrete wind data.
+ *
+ * Wind direction is circular data, so this function handles wrap-around
+ * across 0/360 degrees before linear interpolation.
+ *
+ * If h is above the highest wind-data level, the wind direction at the
+ * highest level is returned.
+ */
+double interpolate_wind_direction_across_360(double h, int total){	//return wind direction based on discrete wind data
 	int i=1;
-	double dir=9999.9;
+	double dir;
 	double ratio, wind1, wind2;
 
 	dir=W1[total-1].wind_dir;
@@ -3692,6 +3847,12 @@ double get_dir(double h, int total){	//return wind direction based on discrete w
 	return dir;
 }
 
+/*
+ * Build WIND structure array from input atmospheric data arrays.
+ *
+ * This function converts separate arrays (altitude, wind speed,
+ * direction, temperature, pressure) into an array of WIND structures.
+ */
 void makewindstruct(int imax, double *alt, double *v, double *dir, double *temp, double *pres){
 	W1 = (WIND *)malloc((imax) * sizeof(WIND));
 
@@ -3756,22 +3917,51 @@ void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double 
 		if(WRITE_DEPCENT_TRAJECTORY) fclose(outfile);
 }
 
-void get_sdimcutoff(double *cloud_sigma2, SEG *massreleased_str, int phiint){
-	double averagedmassloading;
-	//int phisize;
-	
-	//phisize = phiint + MAX_GRAINSIZE + 1;
-	//printf("s\tsegregate\tsigmasquare\n");
-	for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
-		averagedmassloading = massreleased_str[s].mass_from_ds[phiint] / cloud_sigma2[s * ZDIM];
-		//printf("%d\t%d\t%1.4e\t%1.4e\t%1.4e\n", phisize, s, massreleased_str[s].mass_from_ds[phiint], cloud_sigma2[s * ZDIM], averagedmassloading);
-		if(averagedmassloading < MINIMUM_CONTRIBUTION * S_DELTA_FOR_FALL_CALC){SDIMCUTOFF = s; break;}
-		//if(massreleased_str[s].mass_from_ds[phiint] / S_DELTA_FOR_FALL_CALC < MINIMUM_CONTRIBUTION){SDIMCUTOFF = s; break;}
-	}
+/*
+ * Determine SDIMCUTOFF for the current integer phi class.
+ *
+ * SDIMCUTOFF is the effective upper limit of source points used in
+ * mass-loading calculation. Source points farther than this cutoff are
+ * ignored when their estimated contribution becomes smaller than the
+ * configured minimum threshold.
+ *
+ * The contribution is estimated from:
+ *   released mass from source s / cloud_sigma2 at ground level
+ *
+ * Inputs:
+ * - cloud_sigma2[phidec][s][z]          : cloud dispersion variance
+ * - massreleased_per_ds[s].mass_from_ds : released mass per source and phi
+ */
+void get_sdimcutoff(
+    double *cloud_sigma2,
+    SEG *massreleased_per_ds,
+    int phiint
+){
+    double estimated_contribution;
+
+    for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
+        /*
+         * Use phidec = 0 and z = 0 as representative values
+         * for the current source point s.
+         */
+        estimated_contribution =
+            massreleased_per_ds[s].mass_from_ds[phiint]
+            / cloud_sigma2[s * ZDIM];
+
+        if(estimated_contribution < MINIMUM_CONTRIBUTION * S_DELTA_FOR_FALL_CALC){
+            SDIMCUTOFF = s;
+            break;
+        }
+    }
 }
 
-void printttlml(int phiint, double *ttlml){
-	int j, phi;
+/*
+ * Debug utility:
+ * Write total mass loading per location for the current phi class.
+ * (Not used in normal woadvance_plume_state_rk4flow)
+ */
+void write_total_massloading(int phiint, double *ttlml){
+	int phi;
 	char string[20];
 	FILE *outfile;
 	
@@ -3780,74 +3970,96 @@ void printttlml(int phiint, double *ttlml){
 	outfile = fopen(string, "w");
 
 	fprintf(outfile, "j\tttlml\n");
-	for(int i = 0; i < LOCDIM; i++){
-		fprintf(outfile, "%d\t%1.4e\n", j, ttlml[i]);
+	for(int j = 0; j < LOCDIM; j++){
+		fprintf(outfile, "%d\t%1.4e\n", j, ttlml[j]);
 	}
 	fclose(outfile);
 }
 
-void printlspml(int phiint, double *lspml){
+/*
+ * Write mass loading contribution for each (location, source, phidec).
+ *
+ * This debug/output file shows how much each source point and decimal phi
+ * class contributes to mass loading at each ground location.
+ */
+void write_massloading_loc_source_phi(int phiint, double *massloading_loc_source_phi){
 	int j, s, phidec, phi;
-	char string[20];
+	char string[64];
 	FILE *outfile;
 	
 	phi = phiint + MAX_GRAINSIZE + 1; 
-	sprintf(string, "lspmlD%d.txt", phi);
+	sprintf(string, "massloading_loc_source_phi%d.txt", phi);
 	outfile = fopen(string, "w");
 
-	fprintf(outfile, "j\ts\tphi\tphidec\tlspml\n");
+	fprintf(outfile, "j\ts\tphi\tphidec\tmassloading_loc_source_phi\n");
 	for(int i = 0; i < LOCDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; i++){
 		phidec = i % PHIDECDIM;
 		s = (i / PHIDECDIM) % SDIM_FOR_FALL_CALC;
 		j = i / (PHIDECDIM * SDIM_FOR_FALL_CALC);
-		fprintf(outfile, "%d\t%d\t%1.1f\t%d\t%1.4e\n", j, s, phi - phidec * 0.1, phidec, lspml[i]);
+		fprintf(outfile, "%d\t%d\t%1.1f\t%d\t%1.4e\n", j, s, phi - phidec * 0.1, phidec, massloading_loc_source_phi[i]);
 	}
 	fclose(outfile);
 }
 
-void printS4eachphidec(DEP *l, int phiint, double *lspml){ // Output S for 0.1 phi interval at each location (2024/12/3)
-	int idx, idxmax, j, jprevious, phidec, phi;
-	double massloadingeachphidec[PHIDECDIM];
-	char string[20];
-	FILE *outfile;
-	
-	phi = phiint + MAX_GRAINSIZE + 1;
-	idxmax = PHIDECDIM * SDIMCUTOFF * LOCDIM;
-	idx = 0;
-	j = 0;
-	
-	// create file and output header
-	sprintf(string, "S_decimalphi_%d.txt", phi);
-	outfile = fopen(string, "w");
-	fprintf(outfile, "X\tY\tZ");
-	
-	while(idx < PHIDECDIM){
-		fprintf(outfile, "\t%1.1f", phi - idx * 0.1);
-		idx++;
-	}
-	fprintf(outfile, "\n");
-	// end of creating file
-	
-	idx = 0;
-	jprevious = 0;
-	
-	while(idx < idxmax + 1){
-		j = idx / (PHIDECDIM * SDIMCUTOFF);
-		phidec = idx % PHIDECDIM;
-		
-		if(j == jprevious){
-			massloadingeachphidec[phidec] += lspml[idx];
-		}else{
-			phidec = 0;
-			fprintf(outfile, "%1.1f\t%1.1f\t%1.1f", l[j].x + VENT_EASTING, l[j].y + VENT_NORTHING, l[j].z);
-			while(phidec < PHIDECDIM){
-				fprintf(outfile, "\t%1.4e", massloadingeachphidec[phidec]);
-				massloadingeachphidec[phidec] = 0.0;
-				phidec++;
-			}
-			fprintf(outfile, "\n");
-		}
-		jprevious = j;
-		idx++;
-	}
+/*
+ * Write mass loading at each location for decimal phi classes.
+ *
+ * For the current integer phi interval, this function sums
+ * massloading_loc_source_phi over all source points s and outputs
+ * mass loading for each decimal phi bin (phidec) at each ground location.
+ *
+ * Input:
+ * - location_properties[j]      : properties of ground location j
+ * - massloading_loc_source_phi  : mass loading indexed by (location, source, phidec)
+ *
+ * Output:
+ * - S_decimalphi_#.txt
+ */
+void write_massloading_per_phidec_at_locations(
+    DEP *location_properties,
+    int phiint,
+    double *massloading_loc_source_phi
+){
+    int idx;
+    int phi;
+    char string[64];
+    FILE *outfile;
+
+    phi = phiint + MAX_GRAINSIZE + 1;
+
+    sprintf(string, "S_decimalphi_%d.txt", phi);
+    outfile = fopen(string, "w");
+
+    fprintf(outfile, "X\tY\tZ");
+    for(int phidec = 0; phidec < PHIDECDIM; phidec++){
+        fprintf(outfile, "\t%1.1f", phi - phidec * INTERVAL_DECIMAL_PHI);
+    }
+    fprintf(outfile, "\n");
+
+    for(int j = 0; j < LOCDIM; j++){
+        double massloading_each_phidec[PHIDECDIM];
+
+        for(int phidec = 0; phidec < PHIDECDIM; phidec++){
+            massloading_each_phidec[phidec] = 0.0;
+        }
+
+        for(int s = 0; s < SDIMCUTOFF; s++){
+            for(int phidec = 0; phidec < PHIDECDIM; phidec++){
+                idx = ((j * SDIMCUTOFF) + s) * PHIDECDIM + phidec;
+                massloading_each_phidec[phidec] += massloading_loc_source_phi[idx];
+            }
+        }
+
+        fprintf(outfile, "%1.1f\t%1.1f\t%1.1f",
+                location_properties[j].x + VENT_EASTING,
+                location_properties[j].y + VENT_NORTHING,
+                location_properties[j].z);
+
+        for(int phidec = 0; phidec < PHIDECDIM; phidec++){
+            fprintf(outfile, "\t%1.4e", massloading_each_phidec[phidec]);
+        }
+        fprintf(outfile, "\n");
+    }
+
+    fclose(outfile);
 }

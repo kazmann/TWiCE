@@ -114,6 +114,7 @@ double MAPENDN = -9999999;
 
 /*
  * DEP: data structure for each ground location
+ * used to store data for final result file named massloading.txt
  *
  * j                  : index of location
  * x, y, z            : coordinates [m]
@@ -167,8 +168,8 @@ static WIND *W1;
 
 //prototypes
 int init_globals(char *config_file);
-void printparticlereleased(RELEASE *r);
-void printsegregation_per_ds(SEG *r);
+void write_particle_release_theoretical_vs_actual(RELEASE *r);
+void write_massrelease_per_source_phi(SEG *r);
 void printxyz(FILE *in, const char *type, int i, double *srcX, double *srcY, double *srcZ);
 void printxyzq(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q, double *t);
 void printxyze(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q);
@@ -191,12 +192,12 @@ void drift_from_a_certain_source(double *source_x, double *source_y, double *sou
 void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double *cloud_center_y, double *sigma_squre, double *massreleased, SEG *seg);
 double calc_cloud_sigma2(double source_radius, double falltime);
 void mass_release_calc(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased);
-double confirm_released_mass(double *massreleased);
-void locwrite(DEP *l, double *locX, double *locY, double *locZ);
+double compute_total_released_mass(double *massreleased);
+void set_coordinates_to_location_properties(DEP *l, double *locX, double *locY, double *locZ);
 void store_massloading_for_phi(int size, DEP *l, double *massloading);
 void store_total_massloading_and_mean_phi(DEP *l, double *ttlmassloading, double *cummassphi);
 void printdeposit(DEP *location_properties);
-void clearary(int dim, double *ary);
+void clear_array(int dim, double *ary);
 int compare_ttlmassloading(const void *a, const void *b);
 int compare_Md(const void * a, const void * b);
 void set_source_points_on_plume(double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *sourceT, double *plume_trajX, double *plume_trajY, double *plume_traj_Z, double *plume_trajR, double *plume_trajT);
@@ -204,9 +205,9 @@ void set_source_points_on_plume(double *sourceX, double *sourceY, double *source
 void createisopachdata(DEP *l);
 void extractisopachdata(DEP *l);
 void countmeandiameter(DEP *l);
-double calc_dir(double x, double y);
+double compute_direction_from_vent(double x, double y);
 
-void obtaintheoreticallyreleased(RELEASE *r);
+void compute_theoretical_particle_release(RELEASE *r);
 
 
 void read_wind(FILE *f, double *h, double *v, double *d, double *t, double *p);
@@ -563,8 +564,8 @@ int main(int argc, char *argv[]) {
 	write_vertical_profiles_for_phi(name2, h, ttldriftX_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
 	const char *name3 = "falldriftY.txt";
 	write_vertical_profiles_for_phi(name3, h, ttldriftY_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
-	printparticlereleased(r);			//particle_released.txt
-	printsegregation_per_ds(massreleased_per_ds); //segregation_per_ds.txt
+	write_particle_release_theoretical_vs_actual(r);			//particle_released.txt
+	write_massrelease_per_source_phi(massreleased_per_ds); //segregation_per_ds.txt
 	}
 
 	/* 7.2. massloading and isopach */
@@ -941,12 +942,13 @@ void initialize_simulation_state(
     double *cummassphi,
     RELEASE *r
 ){
-    locwrite(location_properties, locX, locY, locZ);
+	/* location_properties is a structure storing final deposition results for each location (massloading.txt) */
+    set_coordinates_to_location_properties(location_properties, locX, locY, locZ);
 
-    clearary(LOCDIM, ttlmassloading);
-    clearary(LOCDIM, cummassphi);
+    clear_array(LOCDIM, ttlmassloading);
+    clear_array(LOCDIM, cummassphi);
 
-    obtaintheoreticallyreleased(r);
+    compute_theoretical_particle_release(r);
 }
 
 
@@ -1105,7 +1107,7 @@ void calculate_massloading(
 		}
 
 		r[phiint].phi = phiint + MAX_GRAINSIZE + 1;
-		r[phiint].actual = confirm_released_mass(massreleased_per_ds_and_phidec);
+		r[phiint].actual = compute_total_released_mass(massreleased_per_ds_and_phidec);
 		
 		// print calculation status to standard output (per integer phi)
 		phisize = phiint + MAX_GRAINSIZE + 1;
@@ -1132,7 +1134,7 @@ void calculate_massloading(
 		}
 		
 		store_massloading_for_phi(phiint, location_properties, tmpmassloading);
-		clearary(LOCDIM, tmpmassloading);
+		clear_array(LOCDIM, tmpmassloading);
 		
 	}// END OF INTEGER PHI LOOP
 }
@@ -1387,8 +1389,13 @@ void write_phi_s_table(
     fclose(outfile);
 }
 
-
-double confirm_released_mass(double *massreleased_per_ds_and_phidec){
+/*
+ * Compute total released mass from the plume for the current phi class.
+ *
+ * Sum massreleased_per_ds_and_phidec over all (s, phidec),
+ * but only for source indices s < SDIMCUTOFF.
+ */
+double compute_total_released_mass(double *massreleased_per_ds_and_phidec){
 	double totalofthefraction = 0.0;
 	int s;
 	
@@ -1404,10 +1411,13 @@ double confirm_released_mass(double *massreleased_per_ds_and_phidec){
 	return(totalofthefraction);
 }
 
-void clearary(int dim, double *ary){
-	for(int i = 0; i < dim; i++){
-		ary[i] = 0.00;
-	}
+/*
+ * Set all elements of the array to zero.
+ */
+void clear_array(int dim, double *ary){
+    for(int i = 0; i < dim; i++){
+        ary[i] = 0.0;
+    }
 }
 
 /*
@@ -2255,7 +2265,7 @@ void mass_release_calc(int zmax, int phidecimal, double phi, double *h, double *
 	}
 }
 
-void locwrite(DEP *location_properties, double *locX, double *locY, double *locZ){
+void set_coordinates_to_location_properties(DEP *location_properties, double *locX, double *locY, double *locZ){
   for(int j = 0; j < LOCDIM ; j++){
     location_properties[j].x = locX[j];
 		location_properties[j].y = locY[j];
@@ -2814,7 +2824,7 @@ void extractisopachdata(DEP *l){
 				l2[j2].x = l[j].x;
 				l2[j2].y = l[j].y;
 				l2[j2].z = l[j].z;
-				dir = calc_dir(l2[j2].x, l2[j2].y);
+				dir = compute_direction_from_vent(l2[j2].x, l2[j2].y);
 				l2[j2].dist = l[j].dist;
 				l2[j2].ttlmassloading = l[j].ttlmassloading;
 				l2[j2].smallerthan1mm = l[j].smallerthan1mm;
@@ -2856,7 +2866,7 @@ void extractisopachdata(DEP *l){
   			intSqrtA = (l2[j].dep[1] - l2[j + 1].dep[1]) * ratio + l2[j + 1].dep[1];
   			intx = (l2[j].x - l2[j + 1].x) * ratio + l2[j + 1].x;
   			inty = (l2[j].y - l2[j + 1].y) * ratio + l2[j + 1].y;
-  			dir = calc_dir(l2[j].x, l2[j].y);
+  			dir = compute_direction_from_vent(l2[j].x, l2[j].y);
   			intdist  = sqrt(intx * intx + inty * inty);
   			 
   			if(j==0){
@@ -2919,7 +2929,7 @@ void extractisopachdata(DEP *l){
 			intS = (l2[j+1].ttlmassloading - l2[j].ttlmassloading) * ratio + l2[j].ttlmassloading;
 			intx = (l2[j + 1].x - l2[j].x) * ratio + l2[j].x;
 			inty = (l2[j + 1].y - l2[j].y) * ratio + l2[j].y;
-			dir = calc_dir(l2[j].x, l2[j].y);
+			dir = compute_direction_from_vent(l2[j].x, l2[j].y);
 			intdist  = sqrt(intx * intx + inty * inty);
 			 
 			if(j==0){
@@ -2971,7 +2981,7 @@ void countmeandiameter(DEP *l){
 			}
 			if(distance < l[j].dist){
 				distance = l[j].dist; x = l[j].x; y = l[j].y;
-				dir = calc_dir(x, y);
+				dir = compute_direction_from_vent(x, y);
 			}
 			if(phi > 5){break;}
 			if(l[j].meandiameter > phi){
@@ -2987,22 +2997,32 @@ void countmeandiameter(DEP *l){
 	fclose(outfile2);
 }
 
-double calc_dir(double x, double y){	// calculate direction of local point from vent
-	double dir;
-	double plusdir = 0.0;
-	if(y < 0){
-		plusdir = 180;
-	}else if(x < 0){
-		plusdir = 360;
-	}else{
-		plusdir = 0;
-	}
-	//printf("x = %1.1f\ty = %1.1f\tplusdir = %1.1f\n", x, y, plusdir);
- 	dir = atan(x / y) / (M_2PI) * 360 + plusdir;
- 	return(dir);
+/*
+ * Compute direction from vent to (x, y) in degrees.
+ *
+ * Angle is measured clockwise from north (y-axis),
+ * consistent with typical geographic convention.
+ */
+double compute_direction_from_vent(double x, double y){
+    double dir;
+
+    dir = atan2(x, y) * 180.0 / M_PI;
+
+    if(dir < 0){
+        dir += 360.0;
+    }
+
+    return dir;
 }
 
-void obtaintheoreticallyreleased(RELEASE *r){
+/*
+ * Compute theoretical particle release for each integer phi class.
+ *
+ * The release mass is obtained by integrating the grain-size PDF
+ * over decimal phi bins within each integer phi interval, then
+ * multiplying by the total eruption mass.
+ */
+void compute_theoretical_particle_release(RELEASE *r){
 	double phi;
 	double pdf_fraction = 0.0;
 
@@ -3016,10 +3036,19 @@ void obtaintheoreticallyreleased(RELEASE *r){
 	}
 }
 
-void printparticlereleased(RELEASE *r){
+
+/*
+ * Due to the upper limit of SDIM, particles that would fall beyond
+ * the maximum source distance are not included in the calculation.
+ *
+ * This effect is more significant for fine particles, which travel farther.
+ * As a result, the actual released mass can be smaller than the
+ * prescribed (theoretical) release amount.
+ */
+void write_particle_release_theoretical_vs_actual(RELEASE *r){
 	FILE *outfile;
 
-	outfile = fopen("particle_released.txt", "w");
+	outfile = fopen("particle_release_theoretical_vs_actual.txt", "w");
 	fprintf(outfile, "#i\tFraction(phi)\tTheoretical(kg)\tWtPercent\tActual(kg)\tActual/Theoretical\n");
 
 	for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
@@ -3029,10 +3058,11 @@ void printparticlereleased(RELEASE *r){
 	fclose(outfile);
 }
 
-void printsegregation_per_ds(SEG *r){
+/* Write mass release per source point for each integer phi class */
+void write_massrelease_per_source_phi(SEG *r){
 	FILE *outfile;
 
-	outfile = fopen("segregation_per_ds.txt", "w");
+	outfile = fopen("particle_released_per_ds.txt", "w");
 	
 	fprintf(outfile, "#source");
 	for(int i = 0; i < MIN_GRAINSIZE - MAX_GRAINSIZE; i++){
@@ -3051,12 +3081,9 @@ void printsegregation_per_ds(SEG *r){
 	fclose(outfile);
 }
 
-//// ORIGINALLY IN GRAIN.C
-
-// F11
+/* Compute particle terminal fall velocity based on Reynolds-number-dependent drag regimes */
 double calc_particle_terminal_velocity(double h, double ashdiam, double part_density, double p, double t) {
-	// double h is almost useless. Just shows h of calculated P & T condition
-  // Modified from function “particle_fall_time” in tephra_calc.c
+  // Modified from function “particle_fall_time” in tephra_calc.c of tephra2
 	double air_density, air_viscosity, temp;
  	double vtl, vti, vtt;
  	double reynolds_number;

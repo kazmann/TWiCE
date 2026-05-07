@@ -31,7 +31,7 @@
 
 #define CUDA_KERNEL_CHECK() do {                                   \
     CUDA_CHECK(cudaGetLastError());                                \
-    CUDA_CHECK(cudaDeviceSynchronize());                           \
+    /*CUDA_CHECK(cudaDeviceSynchronize());*/                           \
 } while (0)
 // end of CUDA Check
 
@@ -203,7 +203,7 @@ int compare_Md(const void * a, const void * b);
 void set_source_points_on_plume(double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *sourceT, double *plume_trajX, double *plume_trajY, double *plume_traj_Z, double *plume_trajR, double *plume_trajT);
 
 void createisopachdata(DEP *l);
-void extractisopachdata(DEP *l);
+void generate_isopach_analysis(DEP *l);
 void countmeandiameter(DEP *l);
 double compute_direction_from_vent(double x, double y);
 
@@ -2042,6 +2042,9 @@ __global__ void funcD01a(
         square_distance =
             pow((depcentX - locX[j]), 2)
             + pow((depcentY - locY[j]), 2);
+		/*square_distance =
+            (depcentX - locX[j]) * (depcentX - locX[j])
+            + (depcentY - locY[j]) * (depcentY - locY[j]);*/
 
         /*
          * Only sources above the current location (locZ[j]) contribute
@@ -2749,7 +2752,7 @@ void read_loc(FILE *f, double *x, double *y, double *z){
 
 void createisopachdata(DEP *l){
 	qsort(l, LOCDIM, sizeof(DEP), compare_ttlmassloading);
-	extractisopachdata(l);  // print out S-A relation
+	generate_isopach_analysis(l);  // print out S-A relation
 
 	//qsort(l, LOCDIM, sizeof(DEP), compare_Md);
 	//countmeandiameter(l);
@@ -2777,7 +2780,43 @@ int compare_Md(const void * a, const void * b){
     }
 }
 
-void extractisopachdata(DEP *l){
+/*
+ * Generate isopach analysis from deposition results.
+ *
+ * Prerequisite:
+ * The input array l (location_properties) must be sorted in descending
+ * order of total mass loading (ttlmassloading).
+ *
+ * This function analyzes the final mass-loading distribution and writes
+ * several summary files for isopach-based interpretation.
+ *
+ * Analysis workflow:
+ *
+ * 1. Extract the distribution axis.
+ *    - Select locations inside the map domain.
+ *    - Traverse the sorted array and keep points that are progressively
+ *      farther from the vent.
+ *    - Store these axis points in l2.
+ *
+ * 2. Write raw S-A data to S_vs_Area.txt.
+ *    - S: mass loading
+ *    - A: estimated isopach area (based on grid count)
+ *    - Also outputs sqrt(A), distance, coordinates, direction,
+ *      mean grain size, and fine fraction.
+ *
+ * 3. Interpolate S-A data at powers-of-two mass-loading levels.
+ *    - Results are written to S_vs_Area_summary.txt.
+ *
+ * 4. Compute D-F indicators.
+ *    - D: area at 0.01 * MaxS
+ *    - F: fine fraction at 0.1 * MaxS
+ *    - Results are written to DF.txt.
+ *
+ * 5. Interpolate using sqrt(A) spacing.
+ *    - Resample the distribution at uniform sqrt(A) intervals.
+ *    - Results are written to Area_vs_S_summary.txt.
+ */
+void generate_isopach_analysis(DEP *l){
 	int jmax = 0;
 	int i = 0;
 	int imax;
@@ -2799,6 +2838,9 @@ void extractisopachdata(DEP *l){
 
 	FILE *outfile;
 
+	// Count grid points on the dispersal axis.
+	// For each mass-loading level, the axis is defined by the farthest
+	// grid point from the vent within the map domain.
 	for(j=0; j<LOCDIM; j++){
 		if(l[j].x > MAPENDW && l[j].x < MAPENDE && l[j].y > MAPENDS && l[j].y < MAPENDN){
 					if(l[j].dist > distance){
@@ -2810,6 +2852,11 @@ void extractisopachdata(DEP *l){
 	
 	maxS = l[0].ttlmassloading;
 	
+	// Store grid points on the dispersal axis into l2.
+	// For each mass-loading level in the sorted location array,
+	// select the farthest grid point from the vent within the map domain.
+	// At the same time, count isopach area and stores massloading (S) vs isopach area (A) relation in the S_vs_Area.txt
+	//
 	DEP *l2;			// l2 stores array of distribution axis, which is defined as most distal point above the certain thickness.
 	l2 = (DEP *)calloc(jmax, sizeof(DEP));
 	int j2 = 0;
@@ -2848,8 +2895,20 @@ void extractisopachdata(DEP *l){
 		}else{break;}
 	}
 	fclose(outfile);
-	
-	
+
+	/*
+	* Resample S-A relationship at logarithmically spaced mass-loading levels.
+	*
+	* Using the axis points stored in l2, interpolate the distribution
+	* at mass-loading values spaced by powers of two (S = 2^n).
+	*
+	* For each target S:
+	* - find two neighboring axis points that bracket S
+	* - linearly interpolate area (A), sqrt(A), coordinates, distance,
+	*   mean grain size, and fine fraction
+	*
+	* Results are written to S_vs_Area_summary.txt.
+	*/	
   outfile = fopen("S_vs_Area_summary.txt", "w");
   log2S = floor(log2(l[0].ttlmassloading)); //20250128
   if(l2[j2-1].ttlmassloading > minS){minS = l2[j2-1].ttlmassloading;} //20250128
@@ -2891,7 +2950,22 @@ void extractisopachdata(DEP *l){
   }
   fclose(outfile);
   
-  // 20250129
+
+  /*
+	* Generate datasets for D-F plot (Walker, 1984).
+	*
+	* DF.txt:
+	* - MaxS      : maximum mass loading
+	* - 0.1MaxS   : mass-loading level used to estimate F
+	* - 0.01MaxS  : mass-loading level used to estimate D
+	* - D         : interpolated isopach area at 0.01 * MaxS
+	* - F         : interpolated fine-particle fraction at 0.1 * MaxS
+	*
+	* Area_vs_S_summary.txt:
+	* - Resample S-A data at integer sqrt(A) intervals.
+	* - This dataset is used to construct Walker-style plots
+	*   relating isopach area and mass loading.
+	*/
   outfile = fopen("DF.txt", "w");
 
   fprintf(outfile, "MaxS(kg/m2)\t0.1MaxS\t0.01MaxS\tD\tF\n");

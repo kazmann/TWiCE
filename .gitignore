@@ -1,0 +1,18 @@
+# まず全部無視
+*
+
+# ディレクトリ探索だけ許可
+!*/
+
+# Git管理したいファイルだけ許可
+!main.cu
+!run.sh
+!point_number_test.sh
+!main.c
+!result_comparison.sh
+!topo.txt
+!wind.txt
+!conf.conf
+
+# Git自身
+!.gitignore

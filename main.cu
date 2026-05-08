@@ -1688,7 +1688,7 @@ static void launch_mass_loading_kernels_buffers(
 
     int N = (int)LSP_chunk;
 
-    int blocksize = 128; /* conventional CUDA block size */
+    int blocksize = 256; /* conventional CUDA block size */
     dim3 block(blocksize, 1, 1);
     dim3 grid((N + block.x - 1) / block.x, 1, 1);
 

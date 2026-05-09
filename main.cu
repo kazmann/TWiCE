@@ -927,71 +927,10 @@ void build_atmosphere_tables(
 }
 
 
-/*
- * Compute plume trajectory and define particle source points along it.
- *
- * First, solve the plume trajectory using input atmospheric data and store
- * the plume centerline coordinates, radius, and travel time.
- * Then, place discrete particle source points along the plume axis for
- * the fall and mass-loading calculations.
- *
- * Outputs:
- * - plume_trajX/Y/Z : plume centerline coordinates [m]
- * - plume_trajR     : plume radius [m]
- * - plume_trajT     : elapsed time from vent along plume axis [s]
- * - sourceX/Y/Z     : particle source coordinates [m]
- * - sourceRadius    : plume radius at each source point [m]
- * - sourceT         : elapsed time from vent to each source point [s]
- */
-void build_plume_and_sources(
-    int windlinenum,
-    double *wind_alt,
-    double *wind_v,
-    double *wind_dir,
-    double *wind_tmp,
-    double *wind_pres,
-    double **plume_trajX,
-    double **plume_trajY,
-    double **plume_trajZ,
-    double **plume_trajR,
-    double **plume_trajT,
-    double **sourceX,
-    double **sourceY,
-    double **sourceZ,
-    double **sourceRadius,
-    double **sourceT
-){
-    // allocate arrays for plume trajectory
-    *plume_trajX = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-    *plume_trajY = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-    *plume_trajZ = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-    *plume_trajR = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-    *plume_trajT = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
 
-	// compute plume centerline
-    Ht = plume_calculation(
-        windlinenum,
-        *plume_trajX, *plume_trajY, *plume_trajZ,
-        *plume_trajR, *plume_trajT,
-        wind_alt, wind_v, wind_dir, wind_tmp, wind_pres
-    );
-
-    // allocate arrays for particle source points
-    *sourceX = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-    *sourceY = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-    *sourceZ = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-    *sourceRadius = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-    *sourceT = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-
-	// interpolate source points along plume trajectory
-    set_source_points_on_plume(
-        *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT,
-        *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT
-    );
-}
 
 /*
- * Allocate woadvance_plume_state_working arrays used in the main mass-loading calculation.
+ * Allocate working arrays used in the main mass-loading calculation.
  *
  * These arrays store temporary fall/drift profiles, per-phi summaries,
  * particle release distributions, cloud-center positions, cloud dispersion,
@@ -3876,6 +3815,92 @@ double ta, dp_over_dz;
 double smax;
 
 
+/////////////////////////////////[PART XX]///////////////////////////////// 
+//
+//
+//                           PLUME CALCULATION
+// build_plume_and_sources
+// 		plume_calculation
+//			makewindstruct
+// 			advance_plume_state_rk4
+// 				func12
+// 				func13
+// 				func14
+// 				func15
+// 				func16
+// 				func17
+// 				func18
+// 				func19
+// 				calc_plume_heat_capacity
+// 				calc_Cp0
+//
+// 
+// set_source_points_on_plume
+// 
+
+/*
+ * Compute plume trajectory and define particle source points along it.
+ *
+ * First, solve the plume trajectory using input atmospheric data and store
+ * the plume centerline coordinates, radius, and travel time.
+ * Then, place discrete particle source points along the plume axis for
+ * the fall and mass-loading calculations.
+ *
+ * Outputs:
+ * - plume_trajX/Y/Z : plume centerline coordinates [m]
+ * - plume_trajR     : plume radius [m]
+ * - plume_trajT     : elapsed time from vent along plume axis [s]
+ * - sourceX/Y/Z     : particle source coordinates [m]
+ * - sourceRadius    : plume radius at each source point [m]
+ * - sourceT         : elapsed time from vent to each source point [s]
+ */
+void build_plume_and_sources(
+    int windlinenum,
+    double *wind_alt,
+    double *wind_v,
+    double *wind_dir,
+    double *wind_tmp,
+    double *wind_pres,
+    double **plume_trajX,
+    double **plume_trajY,
+    double **plume_trajZ,
+    double **plume_trajR,
+    double **plume_trajT,
+    double **sourceX,
+    double **sourceY,
+    double **sourceZ,
+    double **sourceRadius,
+    double **sourceT
+){
+    // allocate arrays for plume trajectory
+    *plume_trajX = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajY = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajZ = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajR = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajT = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+
+	// compute plume centerline
+    Ht = plume_calculation(
+        windlinenum,
+        *plume_trajX, *plume_trajY, *plume_trajZ,
+        *plume_trajR, *plume_trajT,
+        wind_alt, wind_v, wind_dir, wind_tmp, wind_pres
+    );
+
+    // allocate arrays for particle source points
+    *sourceX = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceY = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceZ = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceRadius = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceT = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+
+	// interpolate source points along plume trajectory
+    set_source_points_on_plume(
+        *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT,
+        *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT
+    );
+}
+
 /*
  * Compute plume trajectory and source-point properties.
  *
@@ -4079,6 +4104,7 @@ double plume_calculation(int imax, double *sourceX, double *sourceY, double *sou
 
 	return(Ht);
 }
+
 
 /*
  * Advance plume state by one step using 4th-order Runge-Kutta (RK4).

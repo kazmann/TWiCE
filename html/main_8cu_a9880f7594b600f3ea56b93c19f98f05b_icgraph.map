@@ -1,0 +1,11 @@
+<map id="compute_direction_from_vent" name="compute_direction_from_vent">
+<area shape="rect" id="Node000001" title=" " alt="" coords="545,31,763,56"/>
+<area shape="rect" id="Node000002" href="$main_8cu.html#a333a366b57769e91949b0a08fcc1074b" title=" " alt="" coords="321,5,475,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="532,34,475,28,476,23,532,29"/>
+<area shape="rect" id="Node000003" href="$main_8cu.html#ae90aba239b8b985023af3aa2a700594b" title=" " alt="" coords="299,55,497,80"/>
+<area shape="poly" id="edge2_Node000001_Node000003" title=" " alt="" coords="532,57,498,61,497,55,532,52"/>
+<area shape="rect" id="Node000004" href="$main_8cu.html#a18c5c9dc7921cd94b9e457ec92507a92" title=" " alt="" coords="108,55,251,80"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="285,70,251,70,251,65,285,65"/>
+<area shape="rect" id="Node000005" href="$main_8cu.html#a0ddf1224851353fc92bfbff6f499fa97" title=" " alt="" coords="5,55,60,80"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="94,70,60,70,60,65,94,65"/>
+</map>

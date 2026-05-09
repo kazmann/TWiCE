@@ -1,0 +1,16 @@
+<map id="initialize_simulation_state" name="initialize_simulation_state">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,55,160,95"/>
+<area shape="rect" id="Node000002" href="$main_8cu.html#a623994871035521da5b8f44d872d5ce2" title=" " alt="" coords="239,5,333,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="153,53,226,32,228,37,155,58"/>
+<area shape="rect" id="Node000003" href="$main_8cu.html#a72ac8368d710ab699514af30fe875d1a" title=" " alt="" coords="208,55,364,95"/>
+<area shape="poly" id="edge2_Node000001_Node000003" title=" " alt="" coords="160,73,194,73,194,78,160,78"/>
+<area shape="rect" id="Node000006" href="$main_8cu.html#a6fe9a09a33840d3016b38bc101eb6580" title=" " alt="" coords="412,113,567,153"/>
+<area shape="poly" id="edge7_Node000001_Node000006" title=" " alt="" coords="154,93,208,105,306,118,398,126,398,131,306,123,208,110,153,98"/>
+<area shape="rect" id="Node000004" href="$main_8cu.html#a578be52e8a58739d48662f03447b3429" title=" " alt="" coords="423,12,556,37"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="364,53,423,38,425,43,365,58"/>
+<area shape="rect" id="Node000005" href="$main_8cu.html#ad4ee0b5a45471bab63d687f3dd8422f5" title="Compute partial mass loading for each (location, source, phi) element (= lsmpl)." alt="" coords="615,63,699,88"/>
+<area shape="poly" id="edge6_Node000003_Node000005" title=" " alt="" coords="364,73,601,73,601,78,364,78"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="533,35,602,56,601,61,531,40"/>
+<area shape="poly" id="edge5_Node000005_Node000005" title=" " alt="" coords="629,64,623,54,626,45,638,38,657,36,679,39,689,48,686,52,677,44,657,41,639,43,630,48,628,54,633,61"/>
+<area shape="poly" id="edge8_Node000006_Node000005" title=" " alt="" coords="547,110,605,90,607,95,549,115"/>
+</map>

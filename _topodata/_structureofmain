@@ -1,0 +1,128 @@
+// ==============================
+// [1] Input
+// ==============================
+// [1.1] read_wind_file
+// [1.2] read_loc_file
+// [1.3] phiconvert
+
+
+// ==============================
+// [2] Initialization
+// ==============================
+// [2.1] init_globals
+// [2.2] allocate_work_arrays
+// [2.3] initialize_simulation_state
+
+
+// ==============================
+// [3] Plume & Source Construction
+// ==============================
+// [3.1] build_plume_and_sources
+//   [3.1.1] plume_calculation
+//       [3.1.1.1] advance_plume_state_rk4
+//       [3.1.1.2] calc_plume_heat_capacity
+//       [3.1.1.3] calc_Cp0
+//       [3.1.1.4] func12
+//       [3.1.1.5] func13
+//       [3.1.1.6] func14
+//       [3.1.1.7] func15
+//       [3.1.1.8] func16
+//       [3.1.1.9] func17
+//       [3.1.1.10] func18
+//       [3.1.1.11] func19
+//   [3.1.2] set_source_points_on_plume
+//   [3.1.3] makewindstruct
+
+
+// ==============================
+// [4] Atmosphere & Wind
+// ==============================
+// [4.1] build_atmosphere_tables
+//   [4.1.1] interpolate_atmosphere_and_wind
+//       [4.1.1.1] calc_Tatm
+//       [4.1.1.2] calc_Patm
+//       [4.1.1.3] compute_air_density
+//       [4.1.1.4] compute_pressure_gradient
+//       [4.1.1.5] interpolate_wind_speed
+//       [4.1.1.6] interpolate_wind_direction_across_360
+
+
+// ==============================
+// [5] Mass Loading Core
+// ==============================
+// [5.1] calculate_massloading
+
+// --- 物理モデル ---
+/* [5.1.1] */ compute_falltime_and_drift_profile
+/* [5.1.2] */ compute_mass_release_along_plume
+/* [5.1.3] */ drift_from_a_certain_source
+/* [5.1.4] */ calc_cloud_sigma2
+/* [5.1.5] */ compute_total_released_mass
+/* [5.1.6] */ get_sdimcutoff
+
+// --- CPU mass loading ---
+/* [5.1.7] */ calc_mass_loading
+
+// --- CUDA backend ---
+/* [5.1.7.1] */ funcD01a
+/* [5.1.7.2] */ funcD01b
+
+// --- GPU buffer / wrapper ---
+/* [5.1.8] */ prepare_mass_loading
+/* [5.1.9] */ compute_mass_loading
+/* [5.1.10] */ cleanup_buffers
+
+/* [5.1.8.1] */ allocate_device_buffers_struct
+/* [5.1.8.2] */ pack_fixed_data_buffers
+/* [5.1.8.3] */ copy_fixed_data_to_device_buffers
+/* [5.1.8.4] */ pack_location_data_buffers
+/* [5.1.8.5] */ copy_location_data_to_device_buffers
+/* [5.1.8.6] */ launch_mass_loading_kernels_buffers
+/* [5.1.8.7] */ copy_result_to_host_buffers
+
+
+// ==============================
+// [6] Post-processing
+// ==============================
+// [6.1] createisopachdata
+// [6.2] store_total_massloading_and_mean_phi
+// [6.3] generate_isopach_analysis
+
+
+// ==============================
+// [7] Output
+// ==============================
+// [7.1] write_deposit_summary
+// [7.2] write_plume_files
+// [7.3] write_massrelease_per_source_phi
+// [7.4] write_particle_release_theoretical_vs_actual
+// [7.5] write_total_massloading
+// [7.6] write_massloading_loc_source_phi
+// [7.7] write_massloading_per_phidec_at_locations
+
+
+// ==============================
+// [8] Utilities
+// ==============================
+// [8.1] clear_array
+// [8.2] idx_psz
+// [8.3] idx_ps
+// [8.4] get_line_number
+// [8.5] get_wind_line_number
+
+// --- debug / output helpers ---
+/* [8.6] */ printxyz
+/* [8.7] */ printxyzq
+/* [8.8] */ printxyze
+
+// --- analysis ---
+/* [8.9] */ countmeandiameter
+/* [8.10] */ compare_ttlmassloading
+/* [8.11] */ compare_Md
+/* [8.12] */ compute_direction_from_vent
+
+
+// ==============================
+// [9] Cleanup
+// ==============================
+// [9.1] free_all

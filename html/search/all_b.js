@@ -1,0 +1,26 @@
+var searchData=
+[
+  ['m_0',['M',['../main_8cu.html#abb04f5f017f41f350a3d81fecdbfa762',1,'main.cu']]],
+  ['m_5f2pi_1',['M_2PI',['../main_8cu.html#a4aa2c43b09c1300c334821f5507d6f71',1,'main.cu']]],
+  ['magma_5fdischarge_5frate_2',['MAGMA_DISCHARGE_RATE',['../main_8cu.html#a09af8f76de50a53775d724b4536288fb',1,'main.cu']]],
+  ['magma_5ftemperature_3',['MAGMA_TEMPERATURE',['../main_8cu.html#a4fc1354b92d9ca1c773c2ea407c7306c',1,'main.cu']]],
+  ['main_4',['main',['../main_8cu.html#a0ddf1224851353fc92bfbff6f499fa97',1,'main.cu']]],
+  ['main_2ecu_5',['main.cu',['../main_8cu.html',1,'']]],
+  ['makewindstruct_6',['makewindstruct',['../main_8cu.html#a1eb23d43bd1108032186290ca1b2839e',1,'main.cu']]],
+  ['mapende_7',['MAPENDE',['../main_8cu.html#a8833c580fb55a3185b1a417e0ff8cf9e',1,'main.cu']]],
+  ['mapendn_8',['MAPENDN',['../main_8cu.html#a06246bd0572e2cc281a00b4a3031e940',1,'main.cu']]],
+  ['mapends_9',['MAPENDS',['../main_8cu.html#ad09d13f2130839465ce81c6ddb95d3b7',1,'main.cu']]],
+  ['mapendw_10',['MAPENDW',['../main_8cu.html#af92d12f3a41e51e6cb2c070920e1d4ed',1,'main.cu']]],
+  ['mass_5ffrom_5fds_11',['mass_from_ds',['../structSEG.html#aec2610f1736c87bf9b15d3e8e876d749',1,'SEG']]],
+  ['massloading_5floc_5fsource_5fphid_12',['massloading_loc_source_phiD',['../structDeviceBuffers.html#a327127e8bbb74f5c486fa9b0112beee6',1,'DeviceBuffers']]],
+  ['massreleasedd_13',['massreleasedD',['../structDeviceBuffers.html#ae358cd3fa996b1ec2273ea6306147205',1,'DeviceBuffers']]],
+  ['massreleasedf_14',['massreleasedF',['../structHostBuffers.html#a4c97c0a8052d3562a821f93fb6d4abcb',1,'HostBuffers']]],
+  ['max_5fgrainsize_15',['MAX_GRAINSIZE',['../main_8cu.html#a64ac179684e8b40309a4e01a08603355',1,'main.cu']]],
+  ['max_5fline_16',['MAX_LINE',['../main_8cu.html#a842ed03f27719bc87666bfd1f75415b8',1,'main.cu']]],
+  ['meandiameter_17',['meandiameter',['../structDEP.html#a08afadae96b277563d9b5e4552ed6865',1,'DEP']]],
+  ['median_5fgrainsize_18',['MEDIAN_GRAINSIZE',['../main_8cu.html#a1190f6064934eced8dfcf8728151f439',1,'main.cu']]],
+  ['mesh_5fsize_5fin_5fkm_19',['MESH_SIZE_IN_KM',['../main_8cu.html#ac8cca42b1bdf64bde3d59fd6d2aa0f4a',1,'main.cu']]],
+  ['min_5fgrainsize_20',['MIN_GRAINSIZE',['../main_8cu.html#a96f81b6d7b2c72ec0d71fde2eec79314',1,'main.cu']]],
+  ['minimum_5fcontribution_21',['MINIMUM_CONTRIBUTION',['../main_8cu.html#a38383e25213d625a1044a310e935e212',1,'main.cu']]],
+  ['minimum_5fdeposit_5ffor_5fmd_5fcalc_22',['MINIMUM_DEPOSIT_FOR_MD_CALC',['../main_8cu.html#a1a452bc392980c31c790fdaefca2c008',1,'main.cu']]]
+];

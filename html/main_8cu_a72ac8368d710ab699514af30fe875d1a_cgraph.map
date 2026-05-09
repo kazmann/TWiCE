@@ -1,0 +1,9 @@
+<map id="compute_theoretical_particle_release" name="compute_theoretical_particle_release">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,23,161,63"/>
+<area shape="rect" id="Node000002" href="$main_8cu.html#a578be52e8a58739d48662f03447b3429" title=" " alt="" coords="209,5,343,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="161,30,196,26,196,31,162,36"/>
+<area shape="rect" id="Node000003" href="$main_8cu.html#ad4ee0b5a45471bab63d687f3dd8422f5" title="Compute partial mass loading for each (location, source, phi) element (= lsmpl)." alt="" coords="391,31,475,56"/>
+<area shape="poly" id="edge4_Node000001_Node000003" title=" " alt="" coords="162,41,377,41,377,46,162,46"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="344,26,377,32,376,37,343,31"/>
+<area shape="poly" id="edge3_Node000003_Node000003" title=" " alt="" coords="407,32,401,22,404,13,415,6,433,4,454,7,463,16,459,20,452,12,433,9,417,11,408,16,406,22,411,29"/>
+</map>

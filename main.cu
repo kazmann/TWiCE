@@ -2918,6 +2918,10 @@ int init_globals(char *config_file) {
     else if (!strncmp(token, "Z_DELTA", strlen("Z_DELTA"))) {
       token = strtok_r(NULL, space, ptr1);
       Z_DELTA = (int)atoi(token);
+	  	if (Z_DELTA <= 0) {
+			fprintf(stderr, "Invalid Z_DELTA: %s\n", token);
+			exit(EXIT_FAILURE);
+		}
       if(WRITE_CONF) fprintf(stderr, "Z_DELTA = %1.1f\n", Z_DELTA);
     }
     else if (!strncmp(token, "MINIMUM_CONTRIBUTION", strlen("MINIMUM_CONTRIBUTION"))) {
@@ -2928,11 +2932,19 @@ int init_globals(char *config_file) {
     else if (!strncmp(token, "S_DELTA_FOR_PLUME_CALC", strlen("S_DELTA_FOR_PLUME_CALC"))) {
       token = strtok_r(NULL, space, ptr1);
       S_DELTA_FOR_PLUME_CALC = (int)atoi(token);
+	  if (S_DELTA_FOR_PLUME_CALC <= 0) {
+			fprintf(stderr, "Invalid S_DELTA_FOR_PLUME_CALC: %s\n", token);
+			exit(EXIT_FAILURE);
+		}
       if(WRITE_CONF) fprintf(stderr, "S_DELTA_FOR_PLUME_CALC = %1.1f\n", S_DELTA_FOR_PLUME_CALC);
     }
     else if (!strncmp(token, "S_DELTA_FOR_FALL_CALC", strlen("S_DELTA_FOR_FALL_CALC"))) {
       token = strtok_r(NULL, space, ptr1);
       S_DELTA_FOR_FALL_CALC = (int)atoi(token);
+		if (S_DELTA_FOR_FALL_CALC <= 0) {
+			fprintf(stderr, "Invalid S_DELTA_FOR_FALL_CALC: %s\n", token);
+			exit(EXIT_FAILURE);
+		}
       if(WRITE_CONF) fprintf(stderr, "S_DELTA_FOR_FALL_CALC = %1.1f\n", S_DELTA_FOR_FALL_CALC);
     }
     else if (!strncmp(token, "ERUPTION_MASS", strlen("ERUPTION_MASS"))) {

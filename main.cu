@@ -186,7 +186,7 @@ int get_wind_line_number(FILE *in_wind);
 void get_sdimcutoff(double *cloud_sigma2, SEG *massreleased_per_ds_and_phidec, int phiint);
 
 void atmosphere(int windlinenum, double *h, double *atmT, double *atmP, double *windX, double *windY, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres);
-void interval_fall_calc(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime);
+void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime);
 void store_profile_for_phi(int phiint, double *ttlfalltime, double *ttlfalltime_phiint);
 void drift_from_a_certain_source(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2);
 void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double *cloud_center_y, double *sigma_squre, double *massreleased, SEG *seg);
@@ -1061,7 +1061,7 @@ void calculate_massloading(
 			*   driftY[z]      : horizontal drift in Y-direction [m]
 			*   ttlfalltime[z] : elapsed fall time to height z [s]
 			*/
-			interval_fall_calc(zmax, phidecimal, grainsize, h, atmP, atmT, windX, windY, driftX, driftY, ttlfalltime);
+			compute_falltime_and_drift_profile(zmax, phidecimal, grainsize, h, atmP, atmT, windX, windY, driftX, driftY, ttlfalltime);
 			
 			// 2. Store results for decimal phi classes (phidec) and integer phi classes
 			//    Map ttlfalltime[z] and driftXY[z] to ttlfalltime_phidec[z, phidec] and ttldriftXYphidec[z, phidec]
@@ -1421,7 +1421,7 @@ void clear_array(int dim, double *ary){
 }
 
 /*
- * F20 drift_from_a_certain_source
+ * drift_from_a_certain_source (F20)
  * Compute the center position and dispersion of a particle cloud
  * released from each point along the plume axis.
  *
@@ -1466,12 +1466,36 @@ void drift_from_a_certain_source(double *source_x, double *source_y, double *sou
 	}
 } // End of the function (F20)
 
+
+/*
+ * Flatten 3D index (phidec, s, z) into 1D array index.
+ *
+ * Data layout:
+ *   data[phidec][s][z] is stored as a contiguous 1D array:
+ *     index = phidec * (sdim * zdim) + s * zdim + z
+ *
+ * Dimensions:
+ *   phidec : grain size class (decimal phi)
+ *   s      : source index along plume
+ *   z      : vertical level
+ */
 static __host__ __device__ inline int
 idx_psz(int phidec, int s, int z, int sdim, int zdim)
 {
     return phidec * sdim * zdim + s * zdim + z;
 }
 
+/*
+ * Flatten 2D index (phidec, s) into 1D array index.
+ *
+ * Data layout:
+ *   data[phidec][s] is stored as:
+ *     index = phidec * sdim + s
+ *
+ * Dimensions:
+ *   phidec : grain size class (decimal phi)
+ *   s      : source index along plume
+ */
 static __host__ __device__ inline int
 idx_ps(int phidec, int s, int sdim)
 {
@@ -1480,7 +1504,37 @@ idx_ps(int phidec, int s, int sdim)
 
 #ifdef CUDA
 
-// Structures
+/*
+ * Device-side buffers used in mass loading calculation.
+ *
+ * This structure groups all GPU (device) memory pointers required
+ * for particle transport and deposition calculations.
+ *
+ * Naming convention:
+ *   *D suffix indicates device (GPU) memory.
+ *
+ * Members:
+ *   massloading_loc_source_phiD :
+ *       Mass loading for each (location, source, phidec)
+ *
+ *   ttlmlD :
+ *       Total mass loading per location
+ *
+ *   sourceZD :
+ *       Source height (z) along plume axis
+ *
+ *   centXD, centYD :
+ *       Cloud center positions for each (s, z)
+ *
+ *   sigsqD :
+ *       Variance (sigma^2) of particle cloud spread
+ *
+ *   locXD, locYD, locZD :
+ *       Coordinates of observation locations
+ *
+ *   massreleasedD :
+ *       Mass released per (s, phidec)
+ */
 typedef struct {
     float *massloading_loc_source_phiD;
     float *ttlmlD;
@@ -1498,6 +1552,16 @@ typedef struct {
 } DeviceBuffers;
 
 
+/*
+ * Host-side buffers corresponding to device buffers.
+ *
+ * This structure stores data on the CPU (host) that are:
+ * - copied to the GPU
+ * - or copied back from the GPU after computation
+ *
+ * Naming convention:
+ *   *F suffix indicates host (CPU) memory.
+ */
 typedef struct {
     float *ttlmlF;
 
@@ -1513,7 +1577,31 @@ typedef struct {
     float *massreleasedF;
 } HostBuffers;
 
-
+/*
+ * Unified container for host and device buffers.
+ *
+ * This structure manages all memory used in the mass-loading calculation,
+ * keeping host (CPU) and device (GPU) buffers together.
+ *
+ * Size definitions:
+ *   PSZ :
+ *     Total number of elements for arrays indexed by (phidec, s, z)
+ *       = PHIDECDIM * SDIM * ZDIM
+ *
+ *   LSP :
+ *     Total number of elements for arrays indexed by (location, s, phidec)
+ *       = LOCDIM * SDIM * PHIDECDIM
+ *
+ * Members:
+ *   device :
+ *     Device (GPU) buffers
+ *
+ *   host :
+ *     Host (CPU) buffers
+ *
+ * This structure centralizes memory management and simplifies
+ * host–device data transfer and allocation/free operations.
+ */
 typedef struct {
     size_t PSZ;
     size_t LSP;
@@ -1523,9 +1611,45 @@ typedef struct {
 } Buffers;
 //
 
-// FUNCTIONS FOR CUDA
 
-/* 3. Device Buffer Allocation */
+
+/***************************
+ * Step 3 of calc_mass_loading:
+ * Allocate device (GPU) buffers.
+ *
+ * This step allocates all GPU memory required for mass-loading
+ * calculation, based on problem size and chunking strategy.
+ *
+ * Memory layout:
+ *
+ *   massloading_loc_source_phiD :
+ *     (location, source, phidec)
+ *       = LSP = LOCDIM * SDIM * PHIDECDIM
+ *
+ *   ttlmlD :
+ *     total mass loading per location (current chunk)
+ *       = chunk_locdim
+ *
+ *   sourceZD :
+ *     source height for each plume segment (s)
+ *       = SDIMCUTOFF
+ *
+ *   centXD, centYD, sigsqD :
+ *     cloud properties indexed by (phidec, s, z)
+ *       = PSZ = PHIDECDIM * SDIM * ZDIM
+ *
+ *   locXD, locYD, locZD :
+ *     location coordinates for current chunk
+ *       = chunk_locdim
+ *
+ *   massreleasedD :
+ *     released mass per (phidec, s)
+ *       = PHIDECDIM * SDIMCUTOFF
+ *
+ * Notes:
+ * - chunk_locdim controls the number of locations processed per kernel launch.
+ * - PSZ and LSP must be initialized before calling this function.
+ */
 static void allocate_device_buffers_struct(Buffers *b, int chunk_locdim)
 {
     CUDA_CHECK(cudaMalloc((void**)&b->device.massloading_loc_source_phiD,
@@ -1558,9 +1682,37 @@ static void allocate_device_buffers_struct(Buffers *b, int chunk_locdim)
     CUDA_CHECK(cudaMalloc((void**)&b->device.massreleasedD,
         SDIMCUTOFF * PHIDECDIM * sizeof(float)));
 }
-/* end of #3*/
+/* end of step 3*/
 
-/* 4. Host Data Packing: Fixed Data */
+/***************************
+ * Step 4 of calc_mass_loading:
+ * Pack fixed data into host buffers (CPU → GPU preparation).
+ *
+ * This step converts input data from double precision (CPU-side)
+ * to single precision (float) and packs them into contiguous
+ * host buffers for efficient transfer to GPU.
+ *
+ * Data packed in this step are invariant across location chunks:
+ *
+ *   sourceZF :
+ *     source height along plume (s dimension)
+ *       size = SDIMCUTOFF
+ *
+ *   centXF, centYF, sigsqF :
+ *     cloud properties indexed by (phidec, s, z)
+ *       layout = [phidec][s][z] → flattened to 1D
+ *       size = PSZ = PHIDECDIM * SDIM * ZDIM
+ *
+ *   massreleasedF :
+ *     released mass per (phidec, s)
+ *       layout = [phidec][s]
+ *       size = PHIDECDIM * SDIMCUTOFF
+ *
+ * Notes:
+ * - CUDA device memory is linear; multi-dimensional arrays are flattened.
+ * - Conversion to float reduces memory footprint and improves GPU throughput.
+ * - These buffers are reused across chunks (only location data changes per chunk).
+ */
 static void pack_fixed_data_buffers(
     Buffers *b,
     double *sourceZ,
@@ -1589,9 +1741,33 @@ static void pack_fixed_data_buffers(
         b->host.massreleasedF[ipsc] = (float)massreleased[ipsc];
     }
 }
-/* End of 4*/
+/* End of Step 4*/
 
-/* 5. Host Data Packing: Location Data */
+/***************************
+ * Step 5a (1/4) of calc_mass_loading:
+ * Pack location data into host buffers for the current chunk.
+ *
+ * This step extracts a subset of location coordinates from the full
+ * location arrays and converts them from double to float for GPU use.
+ *
+ * Inputs:
+ *   locX, locY, locZ :
+ *     full arrays of location coordinates (size = LOCDIM)
+ *
+ *   loc0 :
+ *     starting index of the current chunk
+ *
+ *   locN :
+ *     number of locations in this chunk (<= chunk_locdim)
+ *
+ * Output:
+ *   locXF, locYF, locZF :
+ *     packed location coordinates (size = locN)
+ *
+ * Notes:
+ * - Only location data change per chunk; other data are reused.
+ * - Conversion to float reduces memory transfer and improves performance.
+ */
 static void pack_location_data_buffers(
     Buffers *b,
     double *locX,
@@ -1606,9 +1782,21 @@ static void pack_location_data_buffers(
         b->host.locZF[j] = (float)locZ[loc0 + j];
     }
 }
-/* End of 5 */
+/* End of Step 5a */
 
-/* 6. Copy Fixed Data to Device */
+/**************************
+ * Step 6 of calc_mass_loading:
+ * Copy fixed host buffers to device buffers.
+ *
+ * This step transfers data that are reused for all location chunks:
+ * - source height
+ * - cloud center positions
+ * - cloud dispersion variance
+ * - released mass per (phidec, s)
+ *
+ * These arrays are copied only once before the chunk loop.
+ * Location data are copied separately for each chunk.
+ */
 static void copy_fixed_data_to_device_buffers(Buffers *b)
 {
 	CUDA_CHECK(cudaMemcpy(
@@ -1646,9 +1834,25 @@ static void copy_fixed_data_to_device_buffers(Buffers *b)
 		cudaMemcpyHostToDevice
 	));
 }
-/* end of 6 */
+/* end of Step 6 */
 
-/* 7. Copy Location Data to Device */
+/**************************
+ * Step 5b (2/4) of calc_mass_loading:
+ * Copy location data for the current chunk from host to device.
+ *
+ * This step transfers location coordinates (X, Y, Z) for a subset
+ * of locations processed in the current chunk.
+ *
+ * Inputs:
+ *   locN :
+ *     number of locations in this chunk (<= chunk_locdim)
+ *
+ * Notes:
+ * - This transfer is performed for each chunk.
+ * - Only location data change per chunk; other data are already on device.
+ * - Keeping this separate from fixed-data transfer (Step 6) avoids
+ *   redundant memory copies and improves performance.
+ */
 static void copy_location_data_to_device_buffers(Buffers *b, int locN)
 {
     CUDA_CHECK(cudaMemcpy(
@@ -1672,8 +1876,33 @@ static void copy_location_data_to_device_buffers(Buffers *b, int locN)
         cudaMemcpyHostToDevice
     ));
 }
-/* end of #7*/
+/* end of Step 5b*/
 
+/**************************
+ * Step 5c of calc_mass_loading:
+ * Launch CUDA kernels for the current location chunk.
+ *
+ * This step computes mass loading in two stages:
+ *
+ * 1. funcD01a:
+ *    Compute partial mass loading for each flattened element:
+ *      (location, source, phidec)
+ *
+ * 2. funcD01b:
+ *    Reduce partial values over (source, phidec)
+ *    to obtain total mass loading for each location.
+ *
+ * Inputs:
+ *   locN :
+ *     number of locations in the current chunk
+ *
+ * Notes:
+ * - LSP_chunk is the number of (location, source, phidec) elements
+ *   processed in this chunk.
+ * - N is passed as int because CUDA kernels currently use int indexing.
+ * - blocksize controls CUDA thread grouping; chunk_locdim/locN controls
+ *   the amount of location data processed per launch.
+ */
 static void launch_mass_loading_kernels_buffers(
     Buffers *b,
     int locN
@@ -1719,8 +1948,28 @@ static void launch_mass_loading_kernels_buffers(
 
     CUDA_CHECK(cudaDeviceSynchronize());
 }
+/* end of Step 5c*/
 
-/* 9. Copy Result to Host */
+/**************************
+ * Step 5d (4/4) of calc_mass_loading (per chunk):
+ * Copy computed results from device to host and store them.
+ *
+ * This step retrieves total mass loading per location from the GPU,
+ * converts data from float (device) to double (CPU), and writes them
+ * back to the global output array.
+ *
+ * Inputs:
+ *   loc0 :
+ *     starting index of the current chunk in the full location array
+ *
+ *   locN :
+ *     number of locations in this chunk
+ *
+ * Notes:
+ * - This is the final step of per-chunk processing.
+ * - Device results (ttlmlD) are stored in float for performance,
+ *   and converted back to double for CPU-side consistency.
+ */
 static void copy_result_to_host_buffers(Buffers *b, double *ttlml, int loc0, int locN)
 {
     CUDA_CHECK(cudaMemcpy(
@@ -1734,9 +1983,15 @@ static void copy_result_to_host_buffers(Buffers *b, double *ttlml, int loc0, int
         ttlml[loc0 + j] = (double)b->host.ttlmlF[j];
     }
 }
-/* end of #9 */
+/* end of Step 5d */
 
-/* 10 Cleanup new */
+/*
+ * Step 6 of calc_mass_loading:
+ * Cleanup buffers.
+ *
+ * This step releases all host and device memory allocated
+ * during the mass-loading calculation.
+ */
 static void cleanup_buffers(Buffers *b)
 {
 	free(b->host.locXF);
@@ -1765,7 +2020,16 @@ static void cleanup_buffers(Buffers *b)
 }
 /* end of 10b */
 
-/* New functions inserted on May 2, 2026*/
+/*
+ * Preparation stage of calc_mass_loading:
+ * Allocate device buffers and initialize fixed data.
+ *
+ * This stage performs:
+ *   Step 3: allocate device (GPU) buffers
+ *   Step 4: pack and copy fixed data to device
+ *
+ * This function is called once before chunk-based processing.
+ */
 static void prepare_mass_loading(
     Buffers *b,
     double *sourceZ,
@@ -1774,8 +2038,10 @@ static void prepare_mass_loading(
     double *cloud_sigma2,
     double *massreleased,
     int chunk_locdim){
+	/* Step 3 of calc_mass_loading */
     allocate_device_buffers_struct(b, chunk_locdim);
 
+	/* Step 4 of calc_mass_loading */
     pack_fixed_data_buffers(
         b,
         sourceZ,
@@ -1788,6 +2054,34 @@ static void prepare_mass_loading(
     copy_fixed_data_to_device_buffers(b);
 }
 
+/* Step 5 of calc_mass_loading:
+ * Compute mass loading for a chunk of locations using GPU.
+ *
+ * This function executes the per-chunk processing pipeline:
+ *
+ *   Step 5a: pack location data (CPU, double → float)
+ *   Step 5b: copy location data to GPU
+ *   Step 5c: compute mass loading on GPU (CUDA kernels)
+ *   Step 5d: copy results back to CPU and store them
+ *
+ * Inputs:
+ *   locX, locY, locZ :
+ *     full arrays of location coordinates
+ *
+ *   ttlml :
+ *     output array of total mass loading per location
+ *
+ *   loc0 :
+ *     starting index of the current chunk
+ *
+ *   locN :
+ *     number of locations in this chunk
+ *
+ * Notes:
+ * - Fixed data (plume properties, released mass, etc.) must already
+ *   be copied to the device before calling this function.
+ * - This function operates only on a subset (chunk) of locations.
+ */
 static void compute_mass_loading(
     Buffers *b,
     double *locX,
@@ -1797,10 +2091,11 @@ static void compute_mass_loading(
     int loc0,
     int locN
 ){
-    pack_location_data_buffers(b, locX, locY, locZ, loc0, locN);
-    copy_location_data_to_device_buffers(b, locN);
-    launch_mass_loading_kernels_buffers(b, locN);
-    copy_result_to_host_buffers(b, ttlml, loc0, locN);
+	/* Per-chunk GPU processing pipeline */
+	pack_location_data_buffers(b, locX, locY, locZ, loc0, locN);  // Step 5a: pack location data
+	copy_location_data_to_device_buffers(b, locN);                // Step 5b: copy location data to GPU
+	launch_mass_loading_kernels_buffers(b, locN);                 // Step 5c: compute mass loading on GPU
+	copy_result_to_host_buffers(b, ttlml, loc0, locN);            // Step 5d: copy results back to host
 }
 
 /*
@@ -1892,7 +2187,7 @@ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_ce
 
 	/* end of 2.*/
 
-	/* 3. Device Buffer Allocation */
+	/* 3-4. Device Buffer Allocation */
 	Buffers b;
 
 	b.PSZ = PSZ;
@@ -1912,7 +2207,7 @@ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_ce
 
 	b.host.massreleasedF = massreleasedF;
 
-	prepare_mass_loading(
+	prepare_mass_loading(	//Steps 3-4
 		&b,
 		sourceZ,
 		cloud_center_x,
@@ -1930,8 +2225,13 @@ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_ce
 			locN = LOCDIM - loc0;
 		}
 
+		/*
+		* Step 5 of calc_mass_loading:
+		* Per-chunk GPU processing pipeline.
+		*/
 		compute_mass_loading(&b, locX, locY, locZ, ttlml, loc0, locN);
 	}
+		/* Step 6 Clean up*/
 		cleanup_buffers(&b);
 	/* end of host bridge */
 
@@ -2191,7 +2491,25 @@ void calc_mass_loading_location(int phiint, double *massloading_loc_source_phi, 
 
 /* NON CUDA FUNCTIONS (END)*/
 
-void interval_fall_calc(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime){
+/*
+ * Compute fall time and wind drift for a particle of a given grain size.
+ *
+ * Starting from plume height Ht (= h[zmax]), this function integrates
+ * particle settling downward through each vertical interval.
+ *
+ * Outputs:
+ * - ttlfalltime[z] : elapsed fall time from Ht to height level z [s]
+ * - driftX[z]      : accumulated X-direction drift from Ht to height level z [m]
+ * - driftY[z]      : accumulated Y-direction drift from Ht to height level z [m]
+ *
+ * Notes:
+ * - The top interval is h[zmax] → h[zmax-1].
+ * - Lower intervals have thickness Z_DELTA.
+ * - In the default formulation, fall velocity and wind velocity are averaged
+ *   between the top and bottom of each interval.
+ * - Under TEPHRA2, the upper-level wind and terminal velocity are used.
+ */
+void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime){
 	// F10
 	
 #ifdef TEPHRA2

@@ -185,18 +185,18 @@ int get_line_number(FILE *in_wind);
 int get_wind_line_number(FILE *in_wind);
 void get_sdimcutoff(double *cloud_sigma2, SEG *massreleased_per_ds_and_phidec, int phiint);
 
-void atmosphere(int windlinenum, double *h, double *atmT, double *atmP, double *windX, double *windY, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres);
+void interpolate_atmosphere_and_wind(int windlinenum, double *h, double *atmT, double *atmP, double *windX, double *windY, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres);
 void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime);
 void store_profile_for_phi(int phiint, double *ttlfalltime, double *ttlfalltime_phiint);
 void drift_from_a_certain_source(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2);
 void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double *cloud_center_y, double *sigma_squre, double *massreleased, SEG *seg);
 double calc_cloud_sigma2(double source_radius, double falltime);
-void mass_release_calc(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased);
+void compute_mass_release_along_plume(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased);
 double compute_total_released_mass(double *massreleased);
 void set_coordinates_to_location_properties(DEP *l, double *locX, double *locY, double *locZ);
 void store_massloading_for_phi(int size, DEP *l, double *massloading);
 void store_total_massloading_and_mean_phi(DEP *l, double *ttlmassloading, double *cummassphi);
-void printdeposit(DEP *location_properties);
+void write_deposit_summary(DEP *location_properties);	/* write massloading.txt */
 void clear_array(int dim, double *ary);
 int compare_ttlmassloading(const void *a, const void *b);
 int compare_Md(const void * a, const void * b);
@@ -211,7 +211,7 @@ void compute_theoretical_particle_release(RELEASE *r);
 
 
 void read_wind(FILE *f, double *h, double *v, double *d, double *t, double *p);
-void read_loc(FILE *f, double *x, double *y, double *z);
+void read_locations_and_convert_to_vent_centered(FILE *f, double *x, double *y, double *z);
 
 double plume_calculation(int linenum, double *sourceX, double *sourceY, double *sourceZ, double *sourceRadius, double *timeaftervent, double *wind_alt, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres);
 void advance_plume_state_rk4(int, double); // plume calculation using Runge-Kutta
@@ -255,7 +255,125 @@ void phigenerator();
 void phiconvert();
 double calc_pdf_fraction(double phi);
 
-/* Functions for main structure */
+/* Prototypes mainly used calc_mass_loading() */
+/*
+ * Device-side buffers used in mass loading calculation.
+ *
+ * This structure groups all GPU (device) memory pointers required
+ * for particle transport and deposition calculations.
+ *
+ * Naming convention:
+ *   *D suffix indicates device (GPU) memory.
+ *
+ * Members:
+ *   massloading_loc_source_phiD :
+ *       Mass loading for each (location, source, phidec)
+ *
+ *   ttlmlD :
+ *       Total mass loading per location
+ *
+ *   sourceZD :
+ *       Source height (z) along plume axis
+ *
+ *   centXD, centYD :
+ *       Cloud center positions for each (s, z)
+ *
+ *   sigsqD :
+ *       Variance (sigma^2) of particle cloud spread
+ *
+ *   locXD, locYD, locZD :
+ *       Coordinates of observation locations
+ *
+ *   massreleasedD :
+ *       Mass released per (s, phidec)
+ */
+typedef struct {
+    float *massloading_loc_source_phiD;
+    float *ttlmlD;
+
+    float *sourceZD;
+    float *centXD;
+    float *centYD;
+    float *sigsqD;
+
+    float *locXD;
+    float *locYD;
+    float *locZD;
+
+    float *massreleasedD;
+} DeviceBuffers;
+
+
+/*
+ * Host-side buffers corresponding to device buffers.
+ *
+ * This structure stores data on the CPU (host) that are:
+ * - copied to the GPU
+ * - or copied back from the GPU after computation
+ *
+ * Naming convention:
+ *   *F suffix indicates host (CPU) memory.
+ */
+typedef struct {
+    float *ttlmlF;
+
+    float *sourceZF;
+    float *centXF;
+    float *centYF;
+    float *sigsqF;
+
+    float *locXF;
+    float *locYF;
+    float *locZF;
+
+    float *massreleasedF;
+} HostBuffers;
+
+/*
+ * Unified container for host and device buffers.
+ *
+ * This structure manages all memory used in the mass-loading calculation,
+ * keeping host (CPU) and device (GPU) buffers together.
+ *
+ * Size definitions:
+ *   PSZ :
+ *     Total number of elements for arrays indexed by (phidec, s, z)
+ *       = PHIDECDIM * SDIM * ZDIM
+ *
+ *   LSP :
+ *     Total number of elements for arrays indexed by (location, s, phidec)
+ *       = LOCDIM * SDIM * PHIDECDIM
+ *
+ * Members:
+ *   device :
+ *     Device (GPU) buffers
+ *
+ *   host :
+ *     Host (CPU) buffers
+ *
+ * This structure centralizes memory management and simplifies
+ * host–device data transfer and allocation/free operations.
+ */
+typedef struct {
+    size_t PSZ;
+    size_t LSP;
+
+    DeviceBuffers device;
+    HostBuffers host;
+} Buffers;
+//
+
+static void copy_location_data_to_device_buffers(Buffers *b, int locN);
+static void launch_mass_loading_kernels_buffers(Buffers *b, int locN);
+static void copy_result_to_host_buffers(Buffers *b, double *ttlml, int loc0, int locN);
+static void allocate_device_buffers_struct(Buffers *b, int chunk_locdim);
+static void pack_fixed_data_buffers(Buffers *b,double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *massreleased);
+static void copy_fixed_data_to_device_buffers(Buffers *b);
+static void pack_location_data_buffers(Buffers *b, double *locX, double *locY, double *locZ, int loc0, int locN);
+static void prepare_mass_loading(Buffers *b, double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *massreleased, int chunk_locdim);
+static void compute_mass_loading(Buffers *b, double *locX, double *locY, double *locZ, double *ttlml, int loc0, int locN);
+static void cleanup_buffers(Buffers *b);
+
 void read_wind_file(const char *filename, int *windlinenum,
                     double **wind_alt, double **wind_v, double **wind_dir,
                     double **wind_tmp, double **wind_pres);
@@ -290,7 +408,7 @@ void build_atmosphere_tables(int windlinenum, double Ht,
                              double **windX, double **windY,
                              int *zmax);
 
-void allocate_woadvance_plume_state_rk4_arrays(double **ttlfalltime, double **driftX, double **driftY,
+void allocate_work_arrays(double **ttlfalltime, double **driftX, double **driftY,
                           double **ttlfalltime_phiint,
                           double **ttldriftX_phiint,
                           double **ttldriftY_phiint,
@@ -372,17 +490,26 @@ void free_all(double *wind_alt, double *wind_v, double *wind_dir,
 
 // =========================
 // Main program
-// Orchestrates the simulation woadvance_plume_state_rk4flow:
+// simulation workflow:
 // input → setup → compute → output → cleanup
 // =========================
 
 int main(int argc, char *argv[]) {
 	/* 1. INPUT */
+
+	if (argc != 4) {
+		fprintf(stderr,
+			"Usage: %s config.txt wind.txt loc.txt\n"
+			"Example: %s conf.txt wind.dat loc.dat\n",
+			argv[0], argv[0]);
+		exit(EXIT_FAILURE);
+	}
+
 	/* 1.1. read config file */
 	init_globals(argv[1]);		// to set WRITE_CONF which shows parameter in conf before run
 
 	/* 1.1.1. set calculate grain size range*/
-	PHIDECDIM = (int)(1 / INTERVAL_DECIMAL_PHI);
+	PHIDECDIM = (int)round(1.0 / INTERVAL_DECIMAL_PHI);
 	phiconvert();   // make max and minimum grain sizes ordered
 
 	/* 1.2. read wind (atmospheric) file */
@@ -468,7 +595,7 @@ int main(int argc, char *argv[]) {
 	* SDIM_FOR_FALL_CALC, and LOCDIM.
 	*/
 
-	// TODO: These arrays can be grouped into a SimulationWoadvance_plume_state_rk4space struct
+	// TODO: These arrays can be grouped into a SimulationWorkspace struct
 
 	// temporary arrays for fall time and drift during particle descent
 	// used inside the phi loop in calculate_massloading()
@@ -508,7 +635,7 @@ int main(int argc, char *argv[]) {
 	DEP *location_properties;
 	RELEASE *r;
 
-	allocate_woadvance_plume_state_rk4_arrays(
+	allocate_work_arrays(
 		&ttlfalltime, &driftX, &driftY,
 		&ttlfalltime_phiint, &ttldriftX_phiint, &ttldriftY_phiint,
 		&ttlfalltime_phidec, &ttldriftX_phidec, &ttldriftY_phidec,
@@ -570,7 +697,7 @@ int main(int argc, char *argv[]) {
 
 	/* 7.2. massloading and isopach */
 	store_total_massloading_and_mean_phi(location_properties, ttlmassloading, cummassphi);	//calculate mean diameter for each location
-	if(WRITE_MASSLOADING){printdeposit(location_properties);		//massloading.txt
+	if(WRITE_MASSLOADING){write_deposit_summary(location_properties);		//massloading.txt
 	createisopachdata(location_properties);}						//S_vs_Area.txt
 	
 	/* 8. CLEAN UP */
@@ -617,6 +744,11 @@ void read_wind_file(
     double **wind_pres
 ){
     FILE *in_wind = fopen(filename, "r");
+	if (!in_wind) {
+		fprintf(stderr, "Error: cannot open wind file: %s\n", filename);
+		perror("fopen");
+		exit(EXIT_FAILURE);
+	}
 
     *windlinenum = get_wind_line_number(in_wind);
     rewind(in_wind);
@@ -659,6 +791,11 @@ void read_loc_file(
     double **locZ
 ){
     FILE *in_loc = fopen(filename, "r");
+	if (!in_loc) {
+		fprintf(stderr, "Error: cannot open location file: %s\n", filename);
+		perror("fopen");
+		exit(EXIT_FAILURE);
+	}
 
     *locdim = get_line_number(in_loc);
     rewind(in_loc);
@@ -667,7 +804,7 @@ void read_loc_file(
     *locY = (double *)malloc(*locdim * sizeof(double));
     *locZ = (double *)malloc(*locdim * sizeof(double));
 
-    read_loc(in_loc, *locX, *locY, *locZ);
+    read_locations_and_convert_to_vent_centered(in_loc, *locX, *locY, *locZ);
 
     fclose(in_loc);
 }
@@ -782,7 +919,7 @@ void build_atmosphere_tables(
     (*h)[*zmax] = Ht;	// set the top grid level to the exact plume height Ht
 
 	// interpolate input atmospheric data onto the vertical grid
-    atmosphere(
+    interpolate_atmosphere_and_wind(
         windlinenum,
         *h, *atmT, *atmP, *windX, *windY,		// interpolated data
         wind_v, wind_dir, wind_tmp, wind_pres	// input data (argv[2])
@@ -854,7 +991,7 @@ void build_plume_and_sources(
 }
 
 /*
- * Allocate woadvance_plume_state_rk4ing arrays used in the main mass-loading calculation.
+ * Allocate woadvance_plume_state_working arrays used in the main mass-loading calculation.
  *
  * These arrays store temporary fall/drift profiles, per-phi summaries,
  * particle release distributions, cloud-center positions, cloud dispersion,
@@ -871,7 +1008,7 @@ void build_plume_and_sources(
  * Arrays are allocated here only. Their physical meanings are documented
  * at their declarations in main() and in the functions where they are used.
  */
-void allocate_woadvance_plume_state_rk4_arrays(
+void allocate_work_arrays(
     double **ttlfalltime,
     double **driftX,
     double **driftY,
@@ -1082,7 +1219,7 @@ void calculate_massloading(
 				store_profile_for_phi(phiint, driftY, ttldriftY_phiint);
 			}
 			/* 3. Compute particle release (segregation) along the plume axis */
-			mass_release_calc(zmax, phidecimal, phi, h, atmP, atmT, windX, windY, massreleased_per_ds_and_phidec);
+			compute_mass_release_along_plume(zmax, phidecimal, phi, h, atmP, atmT, windX, windY, massreleased_per_ds_and_phidec);
 		}// END OF DECIMAL PHI LOOP
 		
 		// 4. Compute cloud center positions and dispersion from each source (F20)
@@ -1127,7 +1264,7 @@ void calculate_massloading(
 #endif
 			
 #ifdef TEST
-			void write_massloading_loc_source_phi(phiint, massloading_loc_source_phi);
+			write_massloading_loc_source_phi(phiint, massloading_loc_source_phi);
 #endif
 			if(WRITE_DECIMAL_MASSLOADING){write_massloading_per_phidec_at_locations(location_properties, phiint, massloading_loc_source_phi);}
 			free(massloading_loc_source_phi);
@@ -1146,7 +1283,7 @@ void calculate_massloading(
  * - input data arrays
  * - plume and source arrays
  * - atmospheric profiles
- * - woadvance_plume_state_rk4ing arrays for fall, drift, and mass loading
+ * - working arrays for fall, drift, and mass loading
  * - location properties and release data structures
  *
  * Centralizing deallocation helps prevent memory leaks and
@@ -1504,123 +1641,6 @@ idx_ps(int phidec, int s, int sdim)
 
 #ifdef CUDA
 
-/*
- * Device-side buffers used in mass loading calculation.
- *
- * This structure groups all GPU (device) memory pointers required
- * for particle transport and deposition calculations.
- *
- * Naming convention:
- *   *D suffix indicates device (GPU) memory.
- *
- * Members:
- *   massloading_loc_source_phiD :
- *       Mass loading for each (location, source, phidec)
- *
- *   ttlmlD :
- *       Total mass loading per location
- *
- *   sourceZD :
- *       Source height (z) along plume axis
- *
- *   centXD, centYD :
- *       Cloud center positions for each (s, z)
- *
- *   sigsqD :
- *       Variance (sigma^2) of particle cloud spread
- *
- *   locXD, locYD, locZD :
- *       Coordinates of observation locations
- *
- *   massreleasedD :
- *       Mass released per (s, phidec)
- */
-typedef struct {
-    float *massloading_loc_source_phiD;
-    float *ttlmlD;
-
-    float *sourceZD;
-    float *centXD;
-    float *centYD;
-    float *sigsqD;
-
-    float *locXD;
-    float *locYD;
-    float *locZD;
-
-    float *massreleasedD;
-} DeviceBuffers;
-
-
-/*
- * Host-side buffers corresponding to device buffers.
- *
- * This structure stores data on the CPU (host) that are:
- * - copied to the GPU
- * - or copied back from the GPU after computation
- *
- * Naming convention:
- *   *F suffix indicates host (CPU) memory.
- */
-typedef struct {
-    float *ttlmlF;
-
-    float *sourceZF;
-    float *centXF;
-    float *centYF;
-    float *sigsqF;
-
-    float *locXF;
-    float *locYF;
-    float *locZF;
-
-    float *massreleasedF;
-} HostBuffers;
-
-/*
- * Unified container for host and device buffers.
- *
- * This structure manages all memory used in the mass-loading calculation,
- * keeping host (CPU) and device (GPU) buffers together.
- *
- * Size definitions:
- *   PSZ :
- *     Total number of elements for arrays indexed by (phidec, s, z)
- *       = PHIDECDIM * SDIM * ZDIM
- *
- *   LSP :
- *     Total number of elements for arrays indexed by (location, s, phidec)
- *       = LOCDIM * SDIM * PHIDECDIM
- *
- * Members:
- *   device :
- *     Device (GPU) buffers
- *
- *   host :
- *     Host (CPU) buffers
- *
- * This structure centralizes memory management and simplifies
- * host–device data transfer and allocation/free operations.
- */
-typedef struct {
-    size_t PSZ;
-    size_t LSP;
-
-    DeviceBuffers device;
-    HostBuffers host;
-} Buffers;
-//
-
-static void copy_location_data_to_device_buffers(Buffers *b, int locN);
-static void launch_mass_loading_kernels_buffers(Buffers *b, int locN);
-static void copy_result_to_host_buffers(Buffers *b, double *ttlml, int loc0, int locN);
-static void allocate_device_buffers_struct(Buffers *b, int chunk_locdim);
-static void pack_fixed_data_buffers(Buffers *b,double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *massreleased);
-static void copy_fixed_data_to_device_buffers(Buffers *b);
-static void pack_location_data_buffers(Buffers *b, double *locX, double *locY, double *locZ, int loc0, int locN);
-static void prepare_mass_loading(Buffers *b, double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *massreleased, int chunk_locdim);
-static void compute_mass_loading(Buffers *b, double *locX, double *locY, double *locZ, double *ttlml, int loc0, int locN);
-static void cleanup_buffers(Buffers *b);
 
 /*
  * Compute mass loading at ground locations using GPU acceleration.
@@ -2564,8 +2584,22 @@ void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsi
 	}
 }
 
-// Calculate amount of particle segregation from plume
-void mass_release_calc(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased){
+/*
+ * Compute released particle mass along the plume axis for one decimal phi class.
+ *
+ * For a given grain size (phi), this function estimates how much particle mass
+ * is released from each source interval s along the plume axis.
+ *
+ * The release distribution is controlled by:
+ * - terminal fall velocity of the particle
+ * - wind speed at plume height
+ * - plume thickness
+ * - grain-size PDF fraction
+ *
+ * Output:
+ * - massreleased[phidecimal][s] : released mass from source interval s
+ */
+void compute_mass_release_along_plume(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased){
 	                               //no need of phidecimal: phi already has decimal number.
 	double vphi, vw;
 	double beta;
@@ -2645,7 +2679,25 @@ void store_total_massloading_and_mean_phi(DEP *location_properties, double *ttlm
 	}
 }
 
-void printdeposit(DEP *location_properties){
+/*
+ * Write final deposit results at all locations to file.
+ *
+ * Output file:
+ *   massloading.txt
+ *
+ * Each row corresponds to one location j and contains:
+ * - coordinates (x, y, z) [m]
+ * - distance from vent [m]
+ * - total mass loading [kg/m^2]
+ * - fraction of particles smaller than 1 mm [%]
+ * - mean grain size (phi)
+ * - mass loading for each integer phi class
+ *
+ * Notes:
+ * - Coordinates are shifted by vent position (VENT_EASTING/NORTHING).
+ * - Phi classes are written from coarse to fine.
+ */
+void write_deposit_summary(DEP *location_properties){
 	FILE *outfile;
 	outfile = fopen("massloading.txt", "w");
 
@@ -2660,7 +2712,12 @@ void printdeposit(DEP *location_properties){
 	/*write data*/
 	for(int j = 0; j < LOCDIM; j++){
 		fprintf(outfile, "%1.0f\t%1.0f\t%1.0f\t%1.1f", location_properties[j].x + VENT_EASTING, location_properties[j].y + VENT_NORTHING, location_properties[j].z, location_properties[j].dist);
-		fprintf(outfile, "\t%1.4e\t%1.4f\t%1.4f", location_properties[j].ttlmassloading, location_properties[j].smallerthan1mm/location_properties[j].ttlmassloading*100, location_properties[j].meandiameter);
+		double fraction = 0.0;
+		if(location_properties[j].ttlmassloading > 0){
+			fraction = location_properties[j].smallerthan1mm /
+					location_properties[j].ttlmassloading * 100.0;
+}
+		fprintf(outfile, "\t%1.4e\t%1.4f\t%1.4f", location_properties[j].ttlmassloading, fraction, location_properties[j].meandiameter);
 		for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
 			fprintf(outfile, "\t%1.4e", location_properties[j].dep[phiint]);
 		}
@@ -2669,7 +2726,24 @@ void printdeposit(DEP *location_properties){
 	fclose(outfile);
 }
 
-void atmosphere(int windlinenum, double *h, double *atmT, double *atmP, double *windX, double *windY, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres){
+/*
+ * Interpolate atmospheric and wind data onto the simulation height grid.
+ *
+ * For each height level h[z], this function computes:
+ * - atmospheric temperature atmT[z]
+ * - atmospheric pressure atmP[z]
+ * - wind velocity components windX[z], windY[z]
+ *
+ * Input wind data are read from the atmospheric file and stored in
+ * wind_v, wind_dir, wind_tmp, and wind_pres.
+ *
+ * Notes:
+ * - Input pressure is converted from hPa to Pa.
+ * - Wind direction and speed are converted to X/Y components.
+ * - If WRITE_COLUMN_FILES is enabled, the interpolated table is written
+ *   to atmosphere_used.txt.
+ */
+void interpolate_atmosphere_and_wind(int windlinenum, double *h, double *atmT, double *atmP, double *windX, double *windY, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres){
 	double dir, v;
 	double *vary, *dirary;
 	vary = (double *)malloc(ZDIM * sizeof(double)), dirary = (double *)malloc(ZDIM * sizeof(double));
@@ -2709,6 +2783,36 @@ void atmosphere(int windlinenum, double *h, double *atmT, double *atmP, double *
 	if(WRITE_COLUMN_FILES){fclose(outfile);}
 }
 
+/*
+ * Compute variance (sigma^2) of particle cloud dispersion.
+ *
+ * This function estimates the horizontal spread of a particle cloud
+ * originating from a source of finite radius, based on fall time.
+ *
+ * Two regimes are used following Bonadonna et al. (2005):
+ *
+ * - Coarse particles (short fall time):
+ *     Diffusion-dominated spreading (Eq. 6)
+ *
+ * - Fine particles (long fall time):
+ *     Turbulent eddy diffusion dominates (Eq. 8)
+ *
+ * Inputs:
+ *   source_radius :
+ *     radius of the source (plume cross-section) [m]
+ *
+ *   falltime :
+ *     particle fall time from release height [s]
+ *
+ * Output:
+ *   cloud_sigma2 :
+ *     variance (sigma^2) of horizontal dispersion [m^2]
+ *
+ * Notes:
+ * - virtual_falltime represents the time required for a point source
+ *   to spread to the initial plume radius.
+ * - FALL_TIME_THRESHOLD separates coarse and fine particle regimes.
+ */
 double calc_cloud_sigma2(double source_radius, double falltime) {
 	// time needed for point source to diffuse until sigma equals to the plume radius
 	double virtual_falltime = 0.0;
@@ -2727,7 +2831,28 @@ double calc_cloud_sigma2(double source_radius, double falltime) {
 } // End of the function
 
 
-
+/*
+ * Initialize global parameters from configuration file.
+ *
+ * This function reads key-value pairs from the specified configuration file
+ * and assigns values to global variables used throughout the simulation.
+ *
+ * Supported parameters include:
+ * - physical constants (e.g., DIFFUSION_COEFFICIENT, EDDY_CONST)
+ * - eruption conditions (e.g., ERUPTION_MASS, MAGMA_DISCHARGE_RATE)
+ * - grain size distribution parameters (e.g., MAX_GRAINSIZE, STD_GRAINSIZE)
+ * - numerical settings (e.g., Z_DELTA, S_DELTA_FOR_FALL_CALC)
+ * - output control flags (e.g., WRITE_MASSLOADING, WRITE_COLUMN_FILES)
+ *
+ * Notes:
+ * - Lines starting with '#' or empty lines are ignored.
+ * - Values are parsed as either double or integer depending on parameter.
+ * - Pressure input is assumed to be in hPa where applicable.
+ * - If WRITE_CONF is enabled, all parsed values are printed to stderr.
+ *
+ * Return:
+ *   0 on success, non-zero if file cannot be opened.
+ */
 int init_globals(char *config_file) {
 
   FILE *in_config;
@@ -2737,6 +2862,11 @@ int init_globals(char *config_file) {
   char *token;
 
   in_config = fopen(config_file, "r");
+  	if (!config_file) {
+		fprintf(stderr, "Error: cannot open config file: %s\n", config_file);
+		perror("fopen");
+		exit(EXIT_FAILURE);
+	}
 
   if (in_config == NULL) {
     fprintf(stderr,
@@ -2951,6 +3081,9 @@ int init_globals(char *config_file) {
   return 0;
 }
 
+/*********************** */
+/* file output utilities */
+/* 1. x, y, z */
 void printxyz(FILE *in, const char *header, int imax, double *sourceX, double *sourceY, double *sourceZ){
   fprintf(in, "%s", header);
   for(int i = 0; i < imax; i++){
@@ -2958,6 +3091,7 @@ void printxyz(FILE *in, const char *header, int imax, double *sourceX, double *s
   }
 }
 
+/* 2. x, y, z, q */
 void printxyzq(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q, double *t){
   fprintf(in, "%s", header);
   for(int i = 0; i < imax; i++){
@@ -2965,14 +3099,17 @@ void printxyzq(FILE *in, const char *header, int imax, double *x, double *y, dou
   }
 }
 
+/* 3. x, y, z, *exp */
 void printxyze(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q){
   fprintf(in, "%s", header);
   for(int i = 0; i < imax; i++){
     fprintf(in, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4e\n", i, x[i], y[i], z[i], q[i]);
   }
 }
+/* end of file output utilities */
+/*********************** */
 
-
+/* a utility to get file length */
 int get_line_number(FILE *f){
 	char line[1000];
 	int i = 0;
@@ -2983,6 +3120,33 @@ int get_line_number(FILE *f){
 	return(i);
 }
 
+/******************/
+/* WIND DATA INPUT*/
+/*
+ * NOTE (refactor candidate):
+ * get_wind_line_number() and read_wind() share almost identical
+ * parsing logic and should ideally be unified.
+ *
+ * Current design reads the file twice:
+ *   1) count number of lines
+ *   2) read data into arrays
+ *
+ * Future improvement:
+ * - merge parsing into a single pass
+ * - dynamically allocate or resize arrays
+ * - avoid duplicated sscanf logic
+ */
+
+/*
+ * Count number of wind data points to be stored.
+ *
+ * This function reads the wind input file and counts valid data lines.
+ * If the first data height is above 0 m, one additional surface-level
+ * data point is assumed and added to the count.
+ *
+ * Note:
+ * This parsing logic must remain consistent with read_wind().
+ */
 int get_wind_line_number(FILE *f){
 	char line[1000];
 	int i = 0;
@@ -3009,6 +3173,18 @@ int get_wind_line_number(FILE *f){
 	return(i + additional);
 }
 
+/*
+ * Read wind and atmospheric data from input file.
+ *
+ * The file is expected to contain:
+ *   height, wind speed, wind direction, temperature, pressure
+ *
+ * If the first data height is above 0 m, a synthetic surface-level
+ * data point is inserted at height = 0 m.
+ *
+ * Note:
+ * This parsing logic must remain consistent with get_wind_line_number().
+ */
 void read_wind(FILE *f, double *height, double *speed, double *dir, double *atm_temp, double *atm_pres){
 	char line[1000];
 	int i = 0;
@@ -3055,7 +3231,23 @@ void read_wind(FILE *f, double *height, double *speed, double *dir, double *atm_
 	}
 }
 
-void read_loc(FILE *f, double *x, double *y, double *z){
+/*
+ * Read location coordinates and convert them to a vent-centered coordinate system.
+ *
+ * Input coordinates are given in map coordinates. This function converts them
+ * to a vent-centered system (vent = 0):
+ *   x = X_map - VENT_EASTING
+ *   y = Y_map - VENT_NORTHING
+ *
+ * For each location:
+ * - coordinates are stored relative to the vent
+ * - negative elevation is clipped to z = 0
+ * - map boundaries (MAPENDW/E/S/N) are updated
+ *
+ * Note:
+ * The entire simulation uses a vent-centered coordinate system.
+ */
+void read_locations_and_convert_to_vent_centered(FILE *f, double *x, double *y, double *z){
 	char line[1000];
 	int i = 0;
 	double xtmp, ytmp, ztmp;
@@ -3081,6 +3273,21 @@ void read_loc(FILE *f, double *x, double *y, double *z){
 	printf("MAP BOUNDARY W %1.0f\tE %1.0f\tS %1.0f\tN %1.0f\n", MAPENDW, MAPENDE, MAPENDS, MAPENDN);
 }
 
+/*
+ * Perform isopach analysis on deposit data.
+ *
+ * This function:
+ * - sorts locations by total mass loading (descending)
+ * - generates isopach (thickness–area) relationship
+ *
+ * Input:
+ *   l :
+ *     array of deposit data (locations)
+ *
+ * Notes:
+ * - Sorting modifies the input array in place.
+ * - The sorted order is required for cumulative area analysis.
+ */
 void createisopachdata(DEP *l){
 	qsort(l, LOCDIM, sizeof(DEP), compare_ttlmassloading);
 	generate_isopach_analysis(l);  // print out S-A relation
@@ -3089,26 +3296,36 @@ void createisopachdata(DEP *l){
 	//countmeandiameter(l);
 }
 
-int compare_ttlmassloading(const void * a, const void * b){
+/*
+ * Comparison function for sorting DEP by total mass loading.
+ *
+ * Sort order:
+ *   descending (largest ttlmassloading first)
+ *
+ * Used with qsort() in isopach analysis.
+ */
+int compare_ttlmassloading(const void *a, const void *b){
     double z1 = ((DEP *)a)->ttlmassloading;
-	double z2 = ((DEP *)b)->ttlmassloading;
+    double z2 = ((DEP *)b)->ttlmassloading;
 
-	if (z1 < z2) {
-        return 1;
-    } else {
-        return -1;
-    }
+    if (z1 < z2) return 1;
+    if (z1 > z2) return -1;
+    return 0;
 }
 
-int compare_Md(const void * a, const void * b){
+/*
+ * Comparison function for sorting DEP by mean grain size (phi).
+ *
+ * Sort order:
+ *   ascending (smaller phi first)
+ */
+int compare_Md(const void *a, const void *b){
     double z1 = ((DEP *)a)->meandiameter;
-	double z2 = ((DEP *)b)->meandiameter;
+    double z2 = ((DEP *)b)->meandiameter;
 
-	if (z1 > z2) {
-        return 1;
-    } else {
-        return -1;
-    }
+    if (z1 > z2) return 1;
+    if (z1 < z2) return -1;
+    return 0;
 }
 
 /*
@@ -3357,11 +3574,34 @@ void generate_isopach_analysis(DEP *l){
 	}	// end of j loop
   } 		// end of sqrtA loop
   fclose(outfile);
-
-
-
 }
 
+/*
+ * Compute area–mean grain size relationship of deposits.
+ *
+ * This function analyzes deposited mass at all locations and computes:
+ * - cumulative area exceeding a given mean grain size (phi)
+ * - maximum distance from vent for that area
+ *
+ * Two output files are generated:
+ *
+ *   Mean_vs_Area_summary.txt :
+ *     Summary for discrete phi thresholds (0.1 phi bins)
+ *     Columns:
+ *       mean(phi), area [km^2], max distance [m],
+ *       x, y coordinates of max distance, direction from vent [deg]
+ *
+ *   Mean_vs_Area_all.txt :
+ *     Continuous record for all locations
+ *     Columns:
+ *       mean(phi), cumulative area [km^2], max distance [m]
+ *
+ * Notes:
+ * - Only locations with ttlmassloading >= MINIMUM_DEPOSIT_FOR_MD_CALC are used.
+ * - Locations are assumed to be processed in order of increasing distance.
+ * - Area is computed as count × mesh area (MESH_SIZE_IN_KM^2).
+ * - The loop terminates when mean diameter exceeds phi > 5.
+ */
 void countmeandiameter(DEP *l){
 	int count=0;
 	int flag=0;
@@ -3539,7 +3779,17 @@ void phiconvert(){
 	}
 }
 
-
+/*
+ * Compute mass fraction for a decimal phi bin.
+ *
+ * The grain-size distribution is approximated by a normal distribution
+ * in phi scale with:
+ * - MEDIAN_GRAINSIZE as the mean
+ * - STD_GRAINSIZE as the standard deviation
+ *
+ * This function evaluates the probability density at the center of
+ * the phi bin and multiplies it by INTERVAL_DECIMAL_PHI.
+ */
 double calc_pdf_fraction(double phi){				// calculate fraction of the particle size phi
 																						// based on particle distribution function
 	double demon1, demon2, demon3;
@@ -3556,10 +3806,17 @@ double calc_pdf_fraction(double phi){				// calculate fraction of the particle s
 	return(frac);
 }
 
-//// ORIGINALLY IN WINDY.C
-// Global
-
-// atmosphere structure
+/*
+ * Global state variables for plume calculation.
+ *
+ * These variables are mainly used by plume_calculation() and
+ * advance_plume_state_rk4(). They represent the current plume state,
+ * atmospheric conditions, and model constants during plume integration.
+ *
+ * Note:
+ * These are kept global to avoid passing a large number of tightly coupled
+ * plume-state variables through the RK4 integration functions.
+ */
 
 double g_dir;
 
@@ -4019,6 +4276,8 @@ void advance_plume_state_rk4(int total, double T){
 	R = sqrt(Q / (U * rho_c));
 }
 
+/* */
+/* Function numbers correspond that in Woodhouse et al (2012) */
 double func12(double M_tmp, double rho_a_tmp, double rho_c_tmp, double Q_tmp){			// plume mass flux
 	double dQ_over_ds;
 
@@ -4100,6 +4359,8 @@ double func19(double n_tmp){
 
 	return Rg_tmp;
 }
+
+/* End of Woodhouse functions*/
 
 /*
  * Compute mixture heat capacity Cp for a given gas fraction n.
@@ -4390,7 +4651,7 @@ void get_sdimcutoff(
 /*
  * Debug utility:
  * Write total mass loading per location for the current phi class.
- * (Not used in normal woadvance_plume_state_rk4flow)
+ * (Not used in normal work flow)
  */
 void write_total_massloading(int phiint, double *ttlml){
 	int phi;

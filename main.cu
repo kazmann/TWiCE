@@ -1611,7 +1611,190 @@ typedef struct {
 } Buffers;
 //
 
+static void copy_location_data_to_device_buffers(Buffers *b, int locN);
+static void launch_mass_loading_kernels_buffers(Buffers *b, int locN);
+static void copy_result_to_host_buffers(Buffers *b, double *ttlml, int loc0, int locN);
+static void allocate_device_buffers_struct(Buffers *b, int chunk_locdim);
+static void pack_fixed_data_buffers(Buffers *b,double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *massreleased);
+static void copy_fixed_data_to_device_buffers(Buffers *b);
+static void pack_location_data_buffers(Buffers *b, double *locX, double *locY, double *locZ, int loc0, int locN);
+static void prepare_mass_loading(Buffers *b, double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *massreleased, int chunk_locdim);
+static void compute_mass_loading(Buffers *b, double *locX, double *locY, double *locZ, double *ttlml, int loc0, int locN);
+static void cleanup_buffers(Buffers *b);
 
+/*
+ * Compute mass loading at ground locations using GPU acceleration.
+ *
+ * This (calc_mass_loading) function:
+ * - prepares host buffers (double → float conversion)
+ * - allocates and initializes GPU buffers
+ * - launches CUDA kernels for mass loading computation
+ * - retrieves total mass loading per location
+ *
+ * GPU computation:
+ * - funcD01a: compute partial mass loading for each (location, source, phidec)
+ * - funcD01b: reduce over (source, phidec) to obtain total per location
+ *
+ * Data layout:
+ * - PSZ: (phidec, source, z)
+ * - LSP: (location, phidec, source)
+ *
+ * Note:
+ * Computation is performed in chunks over locations for memory efficiency.
+ */
+void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *ttlml, double *massreleased){
+	/* 
+	* D in the name of parameter (e.g. ttlmlD) comes from "Device", which means such parameters
+	* are used in GPU calculation
+	* F in the name of parameter (e.g. ttlmlF) means such parameters are temporaly ones in CPU
+	*/
+
+	int chunk_locdim = 8192;  // Empirically tuned on NVIDIA GeForce RTX 3060; output verified by diff
+
+	/* 1. Define size of arrays used in GPU */
+	/*
+	* PSZ : size of arrays indexed by (phidec, source, height_interval)
+	* LSP : size of arrays indexed by (location, phidec, source)
+	*/
+	size_t LSP;
+	size_t PSZ; 
+	
+	/* ---- index definitions --------------------------------------
+	 * phidec : phi (grain size) subdivision index
+ 	 * s      : source index along plume axis
+ 	 * z      : vertical layer index
+	 */
+	//int phidec, s, z;
+
+	/* ---- flattened indices -----------------------------------------
+	* Multi-dimensional indices (phidec, source, z) are mapped to
+ 	* 1D arrays for GPU memory access (CUDA global memory is linear).
+	*
+	* ipsz : index for (phidec, source, height_interval)
+	* ips  : index for (phidec, source)
+	*/
+	//int ipsz;
+	//int ips;
+
+	PSZ = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZ = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
+	LSP = (size_t)chunk_locdim * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
+
+	/* end of 1.*/
+
+	/* 2. Host Buffer Allocation */
+
+	float *ttlmlF;
+	ttlmlF = (float *)malloc(chunk_locdim * sizeof(float));
+	if (!ttlmlF) {
+    fprintf(stderr, "Error: malloc failed for ttlmlF\n");
+    exit(EXIT_FAILURE);
+	}
+
+	// Allocate host buffers used for double-to-float conversion
+	float *sourceZF, *centXF, *centYF, *sigsqF, *locXF, *locYF, *locZF, *massreleasedF;
+	sourceZF = (float *)malloc(SDIMCUTOFF * sizeof(float));
+	centXF = (float *)malloc(PSZ * sizeof(float));
+	centYF = (float *)malloc(PSZ * sizeof(float));
+	sigsqF = (float *)malloc(PSZ * sizeof(float));
+
+	locXF = (float *)malloc(chunk_locdim * sizeof(float));
+	locYF = (float *)malloc(chunk_locdim * sizeof(float));
+	locZF = (float *)malloc(chunk_locdim * sizeof(float));
+
+	massreleasedF = (float *)malloc(PHIDECDIM * SDIMCUTOFF * sizeof(float));
+	
+	if (!ttlmlF || !sourceZF || !centXF || !centYF || !sigsqF ||
+    !locXF || !locYF || !locZF || !massreleasedF) {
+    fprintf(stderr, "Error: malloc failed for host buffers\n");
+    exit(EXIT_FAILURE);
+	}	
+
+	/* end of 2.*/
+
+	/* 3-4. Device Buffer Allocation */
+	Buffers b;
+
+	b.PSZ = PSZ;
+	b.LSP  = LSP;
+
+	/* host bridge: required before prepare */
+	b.host.ttlmlF = ttlmlF;
+
+	b.host.sourceZF = sourceZF;
+	b.host.centXF   = centXF;
+	b.host.centYF   = centYF;
+	b.host.sigsqF   = sigsqF;
+
+	b.host.locXF = locXF;
+	b.host.locYF = locYF;
+	b.host.locZF = locZF;
+
+	b.host.massreleasedF = massreleasedF;
+
+	prepare_mass_loading(	//Steps 3-5
+		&b,
+		sourceZ,
+		cloud_center_x,
+		cloud_center_y,
+		cloud_sigma2,
+		massreleased,
+    	chunk_locdim
+	);
+	
+	/* Loop for compute mass loading */
+	for (int loc0 = 0; loc0 < LOCDIM; loc0 += chunk_locdim) {
+
+		int locN = chunk_locdim;
+		if (loc0 + locN > LOCDIM) {
+			locN = LOCDIM - loc0;
+		}
+
+		/*
+		* Step 6 of calc_mass_loading:
+		* Per-chunk GPU processing pipeline.
+		*/
+		compute_mass_loading(&b, locX, locY, locZ, ttlml, loc0, locN);
+	}
+		/* Step 7 Clean up*/
+		cleanup_buffers(&b);
+	/* end of host bridge */
+
+} // End of the function
+
+/* Step 3-5 of calc_mass_loading:
+ * Preparation stage of calc_mass_loading.
+ * Allocate device buffers and initialize fixed data.
+ *
+ * This stage performs:
+ *   Step 3: allocate device (GPU) buffers (structures)
+ *   Step 4: pack and copy fixed data to device
+ *   Step 5: allocate device (GPU) buffers (fixed data)
+ *
+ * This function is called once before chunk-based processing.
+ */
+static void prepare_mass_loading(
+    Buffers *b,
+    double *sourceZ,
+    double *cloud_center_x,
+    double *cloud_center_y,
+    double *cloud_sigma2,
+    double *massreleased,
+    int chunk_locdim){
+	/* Step 3 of calc_mass_loading */
+    allocate_device_buffers_struct(b, chunk_locdim);
+
+	/* Step 4 of calc_mass_loading */
+    pack_fixed_data_buffers(
+        b,
+        sourceZ,
+        cloud_center_x,
+        cloud_center_y,
+        cloud_sigma2,
+        massreleased
+    );
+	/* Step 5 of calc_mass_loading */
+    copy_fixed_data_to_device_buffers(b);
+}
 
 /***************************
  * Step 3 of calc_mass_loading:
@@ -1743,49 +1926,8 @@ static void pack_fixed_data_buffers(
 }
 /* End of Step 4*/
 
-/***************************
- * Step 5a (1/4) of calc_mass_loading:
- * Pack location data into host buffers for the current chunk.
- *
- * This step extracts a subset of location coordinates from the full
- * location arrays and converts them from double to float for GPU use.
- *
- * Inputs:
- *   locX, locY, locZ :
- *     full arrays of location coordinates (size = LOCDIM)
- *
- *   loc0 :
- *     starting index of the current chunk
- *
- *   locN :
- *     number of locations in this chunk (<= chunk_locdim)
- *
- * Output:
- *   locXF, locYF, locZF :
- *     packed location coordinates (size = locN)
- *
- * Notes:
- * - Only location data change per chunk; other data are reused.
- * - Conversion to float reduces memory transfer and improves performance.
- */
-static void pack_location_data_buffers(
-    Buffers *b,
-    double *locX,
-    double *locY,
-    double *locZ,
-    int loc0,
-    int locN
-){
-    for(int j = 0; j < locN; j++){
-        b->host.locXF[j] = (float)locX[loc0 + j];
-        b->host.locYF[j] = (float)locY[loc0 + j];
-        b->host.locZF[j] = (float)locZ[loc0 + j];
-    }
-}
-/* End of Step 5a */
-
 /**************************
- * Step 6 of calc_mass_loading:
+ * Step 5 of calc_mass_loading:
  * Copy fixed host buffers to device buffers.
  *
  * This step transfers data that are reused for all location chunks:
@@ -1834,10 +1976,97 @@ static void copy_fixed_data_to_device_buffers(Buffers *b)
 		cudaMemcpyHostToDevice
 	));
 }
-/* end of Step 6 */
+/* end of Step 5 */
+
+
+/* Step 6 of calc_mass_loading:
+ * Compute mass loading for a chunk of locations using GPU.
+ *
+ * This function executes the per-chunk processing pipeline:
+ *
+ *   Step 6a: pack location data (CPU, double → float)
+ *   Step 6b: copy location data to GPU
+ *   Step 6c: compute mass loading on GPU (CUDA kernels)
+ *   Step 6d: copy results back to CPU and store them
+ *
+ * Inputs:
+ *   locX, locY, locZ :
+ *     full arrays of location coordinates
+ *
+ *   ttlml :
+ *     output array of total mass loading per location
+ *
+ *   loc0 :
+ *     starting index of the current chunk
+ *
+ *   locN :
+ *     number of locations in this chunk
+ *
+ * Notes:
+ * - Fixed data (plume properties, released mass, etc.) must already
+ *   be copied to the device before calling this function.
+ * - This function operates only on a subset (chunk) of locations.
+ */
+static void compute_mass_loading(
+    Buffers *b,
+    double *locX,
+    double *locY,
+    double *locZ,
+    double *ttlml,
+    int loc0,
+    int locN
+){
+	/* Per-chunk GPU processing pipeline */
+	pack_location_data_buffers(b, locX, locY, locZ, loc0, locN);  // Step 6a: pack location data
+	copy_location_data_to_device_buffers(b, locN);                // Step 6b: copy location data to GPU
+	launch_mass_loading_kernels_buffers(b, locN);                 // Step 6c: compute mass loading on GPU
+	copy_result_to_host_buffers(b, ttlml, loc0, locN);            // Step 6d: copy results back to host
+}
+
+
+/***************************
+ * Step 6a (1/4) of calc_mass_loading:
+ * Pack location data into host buffers for the current chunk.
+ *
+ * This step extracts a subset of location coordinates from the full
+ * location arrays and converts them from double to float for GPU use.
+ *
+ * Inputs:
+ *   locX, locY, locZ :
+ *     full arrays of location coordinates (size = LOCDIM)
+ *
+ *   loc0 :
+ *     starting index of the current chunk
+ *
+ *   locN :
+ *     number of locations in this chunk (<= chunk_locdim)
+ *
+ * Output:
+ *   locXF, locYF, locZF :
+ *     packed location coordinates (size = locN)
+ *
+ * Notes:
+ * - Only location data change per chunk; other data are reused.
+ * - Conversion to float reduces memory transfer and improves performance.
+ */
+static void pack_location_data_buffers(
+    Buffers *b,
+    double *locX,
+    double *locY,
+    double *locZ,
+    int loc0,
+    int locN
+){
+    for(int j = 0; j < locN; j++){
+        b->host.locXF[j] = (float)locX[loc0 + j];
+        b->host.locYF[j] = (float)locY[loc0 + j];
+        b->host.locZF[j] = (float)locZ[loc0 + j];
+    }
+}
+/* End of Step 6a */
 
 /**************************
- * Step 5b (2/4) of calc_mass_loading:
+ * Step 6b (2/4) of calc_mass_loading:
  * Copy location data for the current chunk from host to device.
  *
  * This step transfers location coordinates (X, Y, Z) for a subset
@@ -1876,10 +2105,10 @@ static void copy_location_data_to_device_buffers(Buffers *b, int locN)
         cudaMemcpyHostToDevice
     ));
 }
-/* end of Step 5b*/
+/* end of Step 6b*/
 
 /**************************
- * Step 5c of calc_mass_loading:
+ * Step 6c of calc_mass_loading:
  * Launch CUDA kernels for the current location chunk.
  *
  * This step computes mass loading in two stages:
@@ -1948,10 +2177,10 @@ static void launch_mass_loading_kernels_buffers(
 
     CUDA_CHECK(cudaDeviceSynchronize());
 }
-/* end of Step 5c*/
+/* end of Step 6c*/
 
 /**************************
- * Step 5d (4/4) of calc_mass_loading (per chunk):
+ * Step 6d (4/4) of calc_mass_loading (per chunk):
  * Copy computed results from device to host and store them.
  *
  * This step retrieves total mass loading per location from the GPU,
@@ -1983,10 +2212,10 @@ static void copy_result_to_host_buffers(Buffers *b, double *ttlml, int loc0, int
         ttlml[loc0 + j] = (double)b->host.ttlmlF[j];
     }
 }
-/* end of Step 5d */
+/* end of Step 6d */
 
 /*
- * Step 6 of calc_mass_loading:
+ * Step 7 of calc_mass_loading:
  * Cleanup buffers.
  *
  * This step releases all host and device memory allocated
@@ -2018,224 +2247,8 @@ static void cleanup_buffers(Buffers *b)
 	CUDA_CHECK(cudaFree(b->device.massloading_loc_source_phiD));
 	CUDA_CHECK(cudaFree(b->device.ttlmlD));
 }
-/* end of 10b */
+/* end of Step 7 */
 
-/*
- * Preparation stage of calc_mass_loading:
- * Allocate device buffers and initialize fixed data.
- *
- * This stage performs:
- *   Step 3: allocate device (GPU) buffers
- *   Step 4: pack and copy fixed data to device
- *
- * This function is called once before chunk-based processing.
- */
-static void prepare_mass_loading(
-    Buffers *b,
-    double *sourceZ,
-    double *cloud_center_x,
-    double *cloud_center_y,
-    double *cloud_sigma2,
-    double *massreleased,
-    int chunk_locdim){
-	/* Step 3 of calc_mass_loading */
-    allocate_device_buffers_struct(b, chunk_locdim);
-
-	/* Step 4 of calc_mass_loading */
-    pack_fixed_data_buffers(
-        b,
-        sourceZ,
-        cloud_center_x,
-        cloud_center_y,
-        cloud_sigma2,
-        massreleased
-    );
-
-    copy_fixed_data_to_device_buffers(b);
-}
-
-/* Step 5 of calc_mass_loading:
- * Compute mass loading for a chunk of locations using GPU.
- *
- * This function executes the per-chunk processing pipeline:
- *
- *   Step 5a: pack location data (CPU, double → float)
- *   Step 5b: copy location data to GPU
- *   Step 5c: compute mass loading on GPU (CUDA kernels)
- *   Step 5d: copy results back to CPU and store them
- *
- * Inputs:
- *   locX, locY, locZ :
- *     full arrays of location coordinates
- *
- *   ttlml :
- *     output array of total mass loading per location
- *
- *   loc0 :
- *     starting index of the current chunk
- *
- *   locN :
- *     number of locations in this chunk
- *
- * Notes:
- * - Fixed data (plume properties, released mass, etc.) must already
- *   be copied to the device before calling this function.
- * - This function operates only on a subset (chunk) of locations.
- */
-static void compute_mass_loading(
-    Buffers *b,
-    double *locX,
-    double *locY,
-    double *locZ,
-    double *ttlml,
-    int loc0,
-    int locN
-){
-	/* Per-chunk GPU processing pipeline */
-	pack_location_data_buffers(b, locX, locY, locZ, loc0, locN);  // Step 5a: pack location data
-	copy_location_data_to_device_buffers(b, locN);                // Step 5b: copy location data to GPU
-	launch_mass_loading_kernels_buffers(b, locN);                 // Step 5c: compute mass loading on GPU
-	copy_result_to_host_buffers(b, ttlml, loc0, locN);            // Step 5d: copy results back to host
-}
-
-/*
- * Compute mass loading at ground locations using GPU acceleration.
- *
- * This (calc_mass_loading) function:
- * - prepares host buffers (double → float conversion)
- * - allocates and initializes GPU buffers
- * - launches CUDA kernels for mass loading computation
- * - retrieves total mass loading per location
- *
- * GPU computation:
- * - funcD01a: compute partial mass loading for each (location, source, phidec)
- * - funcD01b: reduce over (source, phidec) to obtain total per location
- *
- * Data layout:
- * - PSZ: (phidec, source, z)
- * - LSP: (location, phidec, source)
- *
- * Note:
- * Computation is performed in chunks over locations for memory efficiency.
- */
-void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *ttlml, double *massreleased){
-	/* 
-	* D in the name of parameter (e.g. ttlmlD) comes from "Device", which means such parameters
-	* are used in GPU calculation
-	* F in the name of parameter (e.g. ttlmlF) means such parameters are temporaly ones in CPU
-	*/
-
-	int chunk_locdim = 8192;  // Empirically tuned on NVIDIA GeForce RTX 3060; output verified by diff
-
-	/* 1. Define size of arrays used in GPU */
-	/*
-	* PSZ : size of arrays indexed by (phidec, source, height_interval)
-	* LSP : size of arrays indexed by (location, phidec, source)
-	*/
-	size_t LSP;
-	size_t PSZ; 
-	
-	/* ---- index definitions --------------------------------------
-	 * phidec : phi (grain size) subdivision index
- 	 * s      : source index along plume axis
- 	 * z      : vertical layer index
-	 */
-	//int phidec, s, z;
-
-	/* ---- flattened indices -----------------------------------------
-	* Multi-dimensional indices (phidec, source, z) are mapped to
- 	* 1D arrays for GPU memory access (CUDA global memory is linear).
-	*
-	* ipsz : index for (phidec, source, height_interval)
-	* ips  : index for (phidec, source)
-	*/
-	//int ipsz;
-	//int ips;
-
-	PSZ = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZ = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
-	LSP = (size_t)chunk_locdim * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
-
-	/* end of 1.*/
-
-	/* 2. Host Buffer Allocation */
-
-	float *ttlmlF;
-	ttlmlF = (float *)malloc(chunk_locdim * sizeof(float));
-	if (!ttlmlF) {
-    fprintf(stderr, "Error: malloc failed for ttlmlF\n");
-    exit(EXIT_FAILURE);
-	}
-
-	// Allocate host buffers used for double-to-float conversion
-	float *sourceZF, *centXF, *centYF, *sigsqF, *locXF, *locYF, *locZF, *massreleasedF;
-	sourceZF = (float *)malloc(SDIMCUTOFF * sizeof(float));
-	centXF = (float *)malloc(PSZ * sizeof(float));
-	centYF = (float *)malloc(PSZ * sizeof(float));
-	sigsqF = (float *)malloc(PSZ * sizeof(float));
-
-	locXF = (float *)malloc(chunk_locdim * sizeof(float));
-	locYF = (float *)malloc(chunk_locdim * sizeof(float));
-	locZF = (float *)malloc(chunk_locdim * sizeof(float));
-
-	massreleasedF = (float *)malloc(PHIDECDIM * SDIMCUTOFF * sizeof(float));
-	
-	if (!ttlmlF || !sourceZF || !centXF || !centYF || !sigsqF ||
-    !locXF || !locYF || !locZF || !massreleasedF) {
-    fprintf(stderr, "Error: malloc failed for host buffers\n");
-    exit(EXIT_FAILURE);
-	}	
-
-	/* end of 2.*/
-
-	/* 3-4. Device Buffer Allocation */
-	Buffers b;
-
-	b.PSZ = PSZ;
-	b.LSP  = LSP;
-
-	/* host bridge: required before prepare */
-	b.host.ttlmlF = ttlmlF;
-
-	b.host.sourceZF = sourceZF;
-	b.host.centXF   = centXF;
-	b.host.centYF   = centYF;
-	b.host.sigsqF   = sigsqF;
-
-	b.host.locXF = locXF;
-	b.host.locYF = locYF;
-	b.host.locZF = locZF;
-
-	b.host.massreleasedF = massreleasedF;
-
-	prepare_mass_loading(	//Steps 3-4
-		&b,
-		sourceZ,
-		cloud_center_x,
-		cloud_center_y,
-		cloud_sigma2,
-		massreleased,
-    	chunk_locdim
-	);
-	
-	/* Loop for compute mass loading */
-	for (int loc0 = 0; loc0 < LOCDIM; loc0 += chunk_locdim) {
-
-		int locN = chunk_locdim;
-		if (loc0 + locN > LOCDIM) {
-			locN = LOCDIM - loc0;
-		}
-
-		/*
-		* Step 5 of calc_mass_loading:
-		* Per-chunk GPU processing pipeline.
-		*/
-		compute_mass_loading(&b, locX, locY, locZ, ttlml, loc0, locN);
-	}
-		/* Step 6 Clean up*/
-		cleanup_buffers(&b);
-	/* end of host bridge */
-
-} // End of the function
 
 /**
  * @brief Compute partial mass loading for each (location, source, phi) element (= lsmpl).

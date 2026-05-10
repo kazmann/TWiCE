@@ -2131,6 +2131,10 @@ void interpolate_atmosphere_and_wind(int windlinenum, double *h, double *atmT, d
 // --- CPU mass loading ---
 // [5.4.]  calc_mass_loading
 
+// --- Flatten ---
+// [5.4.1] idx_ps
+// [5.4.2] idx_psz
+
 // --- CUDA backend ---
 // [5.5.1.]  funcD01a
 // [5.5.2.]  funcD01b
@@ -2140,67 +2144,16 @@ void interpolate_atmosphere_and_wind(int windlinenum, double *h, double *atmT, d
 // [5.6.2.]  compute_mass_loading
 // [5.6.3.]  cleanup_buffers
 
-// [5.1.8.1]  allocate_device_buffers_struct
-// [5.1.8.2]  pack_fixed_data_buffers
-// [5.1.8.3]  copy_fixed_data_to_device_buffers
-// [5.1.8.4]  pack_location_data_buffers
-// [5.1.8.5]  copy_location_data_to_device_buffers
-// [5.1.8.6]  launch_mass_loading_kernels_buffers
-// [5.1.8.7]  copy_result_to_host_buffers
+// [5.6.4.]  allocate_device_buffers_struct
+// [5.6.5.]  pack_fixed_data_buffers
+// [5.6.6.]  copy_fixed_data_to_device_buffers
+// [5.6.7.]  pack_location_data_buffers
+// [5.6.8.]  copy_location_data_to_device_buffers
+// [5.6.9.]  launch_mass_loading_kernels_buffers
+// [5.6.10]  copy_result_to_host_buffers
 
 
-/////////////////////[END OF THE PART 05]/////////////////////
-
-/*
- * Write plume trajectory and particle source positions to files.
- *
- * plumetraj.txt:
- *   Centerline of the plume obtained by solving the plume differential equations.
- *   Each entry corresponds to a point along the plume axis.
- *
- * plumesourceposition.txt:
- *   Discrete particle release points distributed along the plume axis.
- *   These serve as sources of particle emission for the fall calculation.
- */
-void write_plume_files(
-    int WRITE_COLUMN_FILES,
-    int SDIM_FOR_PLUME_CALC,
-    int SDIM_FOR_FALL_CALC,
-    double *plume_trajX,
-    double *plume_trajY,
-    double *plume_trajZ,
-    double *plume_trajR,
-    double *plume_trajT,
-    double *sourceX,
-    double *sourceY,
-    double *sourceZ,
-    double *sourceRadius,
-    double *sourceT
-){
-    if(WRITE_COLUMN_FILES){
-        FILE *outfile = fopen("plumetraj.txt", "w");
-        const char *header = "calc_step\tx\ty\tz\tR\ttime\n";
-        printxyzq(outfile, header, SDIM_FOR_PLUME_CALC,
-                  plume_trajX, plume_trajY, plume_trajZ,
-                  plume_trajR, plume_trajT);
-        fclose(outfile);
-    }
-
-    if(WRITE_COLUMN_FILES){
-        FILE *outfile = fopen("plumesourceposition.txt", "w");
-        const char *header = "source\tx\ty\tz\tR\ttime\n";
-        printxyzq(outfile, header, SDIM_FOR_FALL_CALC,
-                  sourceX, sourceY, sourceZ,
-                  sourceRadius, sourceT);
-        fclose(outfile);
-    }
-}
-
-
-
-
-
-/*
+/*[5.1.]
  * Perform main simulation steps for each grain-size class:
  * - fall          : particle settling through atmosphere
  * - drift         : horizontal transport by wind
@@ -2385,7 +2338,678 @@ void calculate_massloading(
 		clear_array(LOCDIM, tmpmassloading);
 		
 	}// END OF INTEGER PHI LOOP
+} /// END OF 5.1.
+
+
+/* [5.2.1.]
+ * Compute released particle mass along the plume axis for one decimal phi class.
+ *
+ * For a given grain size (phi), this function estimates how much particle mass
+ * is released from each source interval s along the plume axis.
+ *
+ * The release distribution is controlled by:
+ * - terminal fall velocity of the particle
+ * - wind speed at plume height
+ * - plume thickness
+ * - grain-size PDF fraction
+ *
+ * Output:
+ * - massreleased[phidecimal][s] : released mass from source interval s
+ */
+void compute_mass_release_along_plume(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased){
+	                               //no need of phidecimal: phi already has decimal number.
+	double vphi, vw;
+	double beta;
+	double demon1, demon2;
+	double pdf_fraction;
+	double grainsize;
+
+	grainsize = pow(2, -phi) * 0.001;
+
+	pdf_fraction = calc_pdf_fraction(phi);
+
+	vw = pow(windX[zmax], 2) + pow(windY[zmax], 2);
+	vw = sqrt(vw);
+	vphi = calc_particle_terminal_velocity(h[zmax], grainsize, PUMICE_DENSITY, atmP[zmax], atmT[zmax]);
+
+	beta = vphi / (vw * PLUME_THICKNESS);
+	
+	//printf("%1.1f\t%1.4e\n", phi, vphi);
+
+	for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
+		if(s==0){
+			demon1 = 0;
+		}else{
+			demon1 = -1 * beta * (s) * S_DELTA_FOR_FALL_CALC;
+		}
+		
+		demon2 = -1 * beta * (s + 1) * S_DELTA_FOR_FALL_CALC;
+		massreleased[s + phidecimal * SDIM_FOR_FALL_CALC] = ERUPTION_MASS * (exp(demon1) - exp(demon2)) * pdf_fraction;
+		//printf("%1.4e\t%1.4e\n", demon1, demon2);
+		//printf("%1.1f\t%d\t%1.4e\n", phi, s, massreleased[s + phidecimal * SDIM_FOR_FALL_CALC]);
+	}
+}	// END OF 5.2.1.
+
+
+/* [5.2.2.]
+ * Compute total released mass from the plume for the current phi class.
+ *
+ * Sum massreleased_per_ds_and_phidec over all (s, phidec),
+ * but only for source indices s < SDIMCUTOFF.
+ */
+double compute_total_released_mass(double *massreleased_per_ds_and_phidec){
+	double totalofthefraction = 0.0;
+	int s;
+	
+	for(int i = 0; i < SDIM_FOR_FALL_CALC * PHIDECDIM; i++){
+		s = i % SDIM_FOR_FALL_CALC;
+		if(s < SDIMCUTOFF){
+			totalofthefraction += massreleased_per_ds_and_phidec[i];
+		}else{
+			totalofthefraction += 0;
+		}
+		
+	}
+	return(totalofthefraction);
+}	// END OF 5.2.2.
+
+
+/* [5.2.3.]
+ * Determine SDIMCUTOFF for the current integer phi class.
+ *
+ * SDIMCUTOFF is the effective upper limit of source points used in
+ * mass-loading calculation. Source points farther than this cutoff are
+ * ignored when their estimated contribution becomes smaller than the
+ * configured minimum threshold.
+ *
+ * The contribution is estimated from:
+ *   released mass from source s / cloud_sigma2 at ground level
+ *
+ * Inputs:
+ * - cloud_sigma2[phidec][s][z]          : cloud dispersion variance
+ * - massreleased_per_ds[s].mass_from_ds : released mass per source and phi
+ */
+void get_sdimcutoff(
+    double *cloud_sigma2,
+    SEG *massreleased_per_ds,
+    int phiint
+){
+    double estimated_contribution;
+
+    for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
+        /*
+         * Use phidec = 0 and z = 0 as representative values
+         * for the current source point s.
+         */
+        estimated_contribution =
+            massreleased_per_ds[s].mass_from_ds[phiint]
+            / cloud_sigma2[s * ZDIM];
+
+        if(estimated_contribution < MINIMUM_CONTRIBUTION * S_DELTA_FOR_FALL_CALC){
+            SDIMCUTOFF = s;
+            break;
+        }
+    }
+}	// END OF 5.2.3.
+
+/* [5.3.1.]
+ * Compute fall time and wind drift for a particle of a given grain size.
+ *
+ * Starting from plume height Ht (= h[zmax]), this function integrates
+ * particle settling downward through each vertical interval.
+ *
+ * Outputs:
+ * - ttlfalltime[z] : elapsed fall time from Ht to height level z [s]
+ * - driftX[z]      : accumulated X-direction drift from Ht to height level z [m]
+ * - driftY[z]      : accumulated Y-direction drift from Ht to height level z [m]
+ *
+ * Notes:
+ * - The top interval is h[zmax] → h[zmax-1].
+ * - Lower intervals have thickness Z_DELTA.
+ * - In the default formulation, fall velocity and wind velocity are averaged
+ *   between the top and bottom of each interval.
+ * - Under TEPHRA2, the upper-level wind and terminal velocity are used.
+ */
+void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime){
+	// F10
+	
+#ifdef TEPHRA2
+	double v0, falltime;
+#else
+	double v1, v0, falltime;
+#endif
+
+	//printf("\n\nh\tp\tt\tair_density\tair_viscosity\tRe\ttermfallv\n");
+				// zmax is count for Ht
+	v0 = calc_particle_terminal_velocity(h[zmax-1], grainsize, PUMICE_DENSITY, atmP[zmax-1], atmT[zmax-1]);
+	
+#ifdef TEPHRA2
+	falltime = (h[zmax]-h[zmax-1]) / (v0);
+	driftX[zmax-1] = falltime * (windX[zmax]);
+	driftY[zmax-1] = falltime * (windY[zmax]);
+#else
+	v1 = calc_particle_terminal_velocity(h[zmax], grainsize, PUMICE_DENSITY, atmP[zmax], atmT[zmax]);	
+	falltime = (h[zmax]-h[zmax-1]) / ((v1 + v0) / 2);
+	driftX[zmax-1] = falltime * (windX[zmax-1] + windX[zmax]) / 2;
+	driftY[zmax-1] = falltime * (windY[zmax-1] + windY[zmax]) / 2;
+#endif
+		
+	ttlfalltime[zmax-1] = falltime;
+
+	for(int z = zmax - 2; z >= 0; z--){ // The Loop 166
+		v0 = calc_particle_terminal_velocity(h[z], grainsize, PUMICE_DENSITY, atmP[z], atmT[z]);
+#ifdef TEPHRA2
+		falltime = Z_DELTA / (v0);
+		driftX[z] = driftX[z+1] + falltime * (windX[z+1]);
+		driftY[z] = driftY[z+1] + falltime * (windY[z+1]);		
+#else
+		v1 = calc_particle_terminal_velocity(h[z+1], grainsize, PUMICE_DENSITY, atmP[z+1], atmT[z+1]);
+		falltime = Z_DELTA / ((v1 + v0) / 2);
+		driftX[z] = driftX[z+1] + falltime * (windX[z+1] + windX[z]) / 2;
+		driftY[z] = driftY[z+1] + falltime * (windY[z+1] + windY[z]) / 2;
+#endif
+		ttlfalltime[z] = ttlfalltime[z+1] + falltime;
+	}
+} // END OF 5.3.1.
+
+/* [5.3.2.]
+ * drift_from_a_certain_source (F20)
+ * Compute the center position and dispersion of a particle cloud
+ * released from each point along the plume axis.
+ *
+ * For each source point s and height interval z, this function calculates:
+ * - cloud_center_x[phidec][s][z]     : X-coordinate of cloud center
+ *                                (wind drift + transport along the plume)
+ * - cloud_center_y[phidec][s][z]     : Y-coordinate of cloud center
+ *                                (wind drift + transport along the plume)
+ * - cloud_sigma2[phidec][s][z] : variance of horizontal dispersion of the cloud
+ *
+ * A "cloud" is a group of particles that:
+ * - share the same grain size (same phidec)
+ * - are released from the same source point s
+ */
+void drift_from_a_certain_source(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2){
+	int s, z, phidec, idz, idz_s;
+	int z_source;		// z_source means interval count of z axis of just above the source height
+	double residue_up, fall_time_residue_up;
+	double falltime, ttldriftX, ttldriftY;
+
+	for(int idx = 0; idx < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx++){		// idx is count for driftXY_s and cloud_sigma2
+		z = idx % ZDIM;
+		s = (idx / ZDIM) % SDIM_FOR_FALL_CALC;
+		phidec = idx / (ZDIM * SDIM_FOR_FALL_CALC);
+		z_source = ceil(source_height[s] / Z_DELTA); // source_height means source height
+		if(z < z_source){
+			idz = (phidec * ZDIM) + z; idz_s = (phidec * ZDIM) + z_source; // idz is count for driftXY and TotalFallTime
+			residue_up = source_height[s] - (z_source - 1) * Z_DELTA;
+			fall_time_residue_up =  (TotalFallTime[idz_s - 1] - TotalFallTime[idz_s]) * residue_up / Z_DELTA;
+
+			falltime = TotalFallTime[idz] - TotalFallTime[idz_s - 1] + fall_time_residue_up;
+
+			ttldriftX = (driftX[idz] - driftX[idz_s - 1]) + (driftX[idz_s - 1] - driftX[idz_s]) * residue_up / Z_DELTA;
+			ttldriftY = (driftY[idz] - driftY[idz_s - 1]) + (driftY[idz_s - 1] - driftY[idz_s]) * residue_up / Z_DELTA;
+
+			//printf("phidec=%d\ts=%d\tz=%d\tdrftX=%1.4f\tttldrftX = %1.4f\n", phidec, s, z, driftX[idz], ttldriftX);
+
+			cloud_center_x[idx] = source_x[s] + ttldriftX;
+			cloud_center_y[idx] = source_y[s] + ttldriftY;
+			cloud_sigma2[idx] = calc_cloud_sigma2(sourceRadius[s] * PLUME_RADIUS_CORRECTION, falltime); // F21
+		}
+	}
+} // End of the function (F20) [5.3.2.]
+
+/* [5.3.3.]
+ * Compute variance (sigma^2) of particle cloud dispersion.
+ *
+ * This function estimates the horizontal spread of a particle cloud
+ * originating from a source of finite radius, based on fall time.
+ *
+ * Two regimes are used following Bonadonna et al. (2005):
+ *
+ * - Coarse particles (short fall time):
+ *     Diffusion-dominated spreading (Eq. 6)
+ *
+ * - Fine particles (long fall time):
+ *     Turbulent eddy diffusion dominates (Eq. 8)
+ *
+ * Inputs:
+ *   source_radius :
+ *     radius of the source (plume cross-section) [m]
+ *
+ *   falltime :
+ *     particle fall time from release height [s]
+ *
+ * Output:
+ *   cloud_sigma2 :
+ *     variance (sigma^2) of horizontal dispersion [m^2]
+ *
+ * Notes:
+ * - virtual_falltime represents the time required for a point source
+ *   to spread to the initial plume radius.
+ * - FALL_TIME_THRESHOLD separates coarse and fine particle regimes.
+ */
+double calc_cloud_sigma2(double source_radius, double falltime) {
+	// time needed for point source to diffuse until sigma equals to the plume radius
+	double virtual_falltime = 0.0;
+	double cloud_sigma2 = 0.0;
+
+	if (falltime < FALL_TIME_THRESHOLD){
+		// coarse particle	Bonadonna+(2005) Eq.6
+		virtual_falltime = source_radius * source_radius / (4 * DIFFUSION_COEFFICIENT);
+		cloud_sigma2 = 4 * DIFFUSION_COEFFICIENT * (falltime + virtual_falltime);
+	}else{
+		// fine particle	Bonadonna+(2005) Eq.8
+		virtual_falltime = pow((5 * source_radius * source_radius) / (8 * EDDY_CONST), 0.4);
+		cloud_sigma2 = 8 * EDDY_CONST / 5 * pow(falltime + virtual_falltime, 2.5);
+	}
+	return(cloud_sigma2);
+} // END OF 5.3.3.
+
+
+/* [5.4.]
+ * Compute mass loading at ground locations using GPU acceleration.
+ *
+ * This (calc_mass_loading) function:
+ * - prepares host buffers (double → float conversion)
+ * - allocates and initializes GPU buffers
+ * - launches CUDA kernels for mass loading computation
+ * - retrieves total mass loading per location
+ *
+ * GPU computation:
+ * - funcD01a: compute partial mass loading for each (location, source, phidec)
+ * - funcD01b: reduce over (source, phidec) to obtain total per location
+ *
+ * Data layout:
+ * - PSZ: (phidec, source, z)
+ * - LSP: (location, phidec, source)
+ *
+ * Note:
+ * Computation is performed in chunks over locations for memory efficiency.
+ */
+void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *ttlml, double *massreleased){
+	/* 
+	* D in the name of parameter (e.g. ttlmlD) comes from "Device", which means such parameters
+	* are used in GPU calculation
+	* F in the name of parameter (e.g. ttlmlF) means such parameters are temporaly ones in CPU
+	*/
+
+	int chunk_locdim = 8192;  // Empirically tuned on NVIDIA GeForce RTX 3060; output verified by diff
+
+	/* 1. Define size of arrays used in GPU */
+	/*
+	* PSZ : size of arrays indexed by (phidec, source, height_interval)
+	* LSP : size of arrays indexed by (location, phidec, source)
+	*/
+	size_t LSP;
+	size_t PSZ; 
+	
+	/* ---- index definitions --------------------------------------
+	 * phidec : phi (grain size) subdivision index
+ 	 * s      : source index along plume axis
+ 	 * z      : vertical layer index
+	 */
+	//int phidec, s, z;
+
+	/* ---- flattened indices -----------------------------------------
+	* Multi-dimensional indices (phidec, source, z) are mapped to
+ 	* 1D arrays for GPU memory access (CUDA global memory is linear).
+	*
+	* ipsz : index for (phidec, source, height_interval)
+	* ips  : index for (phidec, source)
+	*/
+	//int ipsz;
+	//int ips;
+
+	PSZ = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZ = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
+	LSP = (size_t)chunk_locdim * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
+
+	/* end of 1.*/
+
+	/* 2. Host Buffer Allocation */
+
+	float *ttlmlF;
+	ttlmlF = (float *)malloc(chunk_locdim * sizeof(float));
+	if (!ttlmlF) {
+    fprintf(stderr, "Error: malloc failed for ttlmlF\n");
+    exit(EXIT_FAILURE);
+	}
+
+	// Allocate host buffers used for double-to-float conversion
+	float *sourceZF, *centXF, *centYF, *sigsqF, *locXF, *locYF, *locZF, *massreleasedF;
+	sourceZF = (float *)malloc(SDIMCUTOFF * sizeof(float));
+	centXF = (float *)malloc(PSZ * sizeof(float));
+	centYF = (float *)malloc(PSZ * sizeof(float));
+	sigsqF = (float *)malloc(PSZ * sizeof(float));
+
+	locXF = (float *)malloc(chunk_locdim * sizeof(float));
+	locYF = (float *)malloc(chunk_locdim * sizeof(float));
+	locZF = (float *)malloc(chunk_locdim * sizeof(float));
+
+	massreleasedF = (float *)malloc(PHIDECDIM * SDIMCUTOFF * sizeof(float));
+	
+	if (!ttlmlF || !sourceZF || !centXF || !centYF || !sigsqF ||
+    !locXF || !locYF || !locZF || !massreleasedF) {
+    fprintf(stderr, "Error: malloc failed for host buffers\n");
+    exit(EXIT_FAILURE);
+	}	
+
+	/* end of 2.*/
+
+	/* 3-4. Device Buffer Allocation */
+	Buffers b;
+
+	b.PSZ = PSZ;
+	b.LSP  = LSP;
+
+	/* host bridge: required before prepare */
+	b.host.ttlmlF = ttlmlF;
+
+	b.host.sourceZF = sourceZF;
+	b.host.centXF   = centXF;
+	b.host.centYF   = centYF;
+	b.host.sigsqF   = sigsqF;
+
+	b.host.locXF = locXF;
+	b.host.locYF = locYF;
+	b.host.locZF = locZF;
+
+	b.host.massreleasedF = massreleasedF;
+
+	prepare_mass_loading(	//Steps 3-5
+		&b,
+		sourceZ,
+		cloud_center_x,
+		cloud_center_y,
+		cloud_sigma2,
+		massreleased,
+    	chunk_locdim
+	);
+	
+	/* Loop for compute mass loading */
+	for (int loc0 = 0; loc0 < LOCDIM; loc0 += chunk_locdim) {
+
+		int locN = chunk_locdim;
+		if (loc0 + locN > LOCDIM) {
+			locN = LOCDIM - loc0;
+		}
+
+		/*
+		* Step 6 of calc_mass_loading:
+		* Per-chunk GPU processing pipeline.
+		*/
+		compute_mass_loading(&b, locX, locY, locZ, ttlml, loc0, locN);
+	}
+		/* Step 7 Clean up*/
+		cleanup_buffers(&b);
+	/* end of host bridge */
+
+} // END OF 5.4.
+
+
+/* [5.4.1.]
+ * Flatten 3D index (phidec, s, z) into 1D array index.
+ *
+ * Data layout:
+ *   data[phidec][s][z] is stored as a contiguous 1D array:
+ *     index = phidec * (sdim * zdim) + s * zdim + z
+ *
+ * Dimensions:
+ *   phidec : grain size class (decimal phi)
+ *   s      : source index along plume
+ *   z      : vertical level
+ */
+static __host__ __device__ inline int
+idx_psz(int phidec, int s, int z, int sdim, int zdim)
+{
+    return phidec * sdim * zdim + s * zdim + z;
+} // END OF 5.4.1.
+
+/* [5.4.2.]
+ * Flatten 2D index (phidec, s) into 1D array index.
+ *
+ * Data layout:
+ *   data[phidec][s] is stored as:
+ *     index = phidec * sdim + s
+ *
+ * Dimensions:
+ *   phidec : grain size class (decimal phi)
+ *   s      : source index along plume
+ */
+static __host__ __device__ inline int
+idx_ps(int phidec, int s, int sdim)
+{
+    return phidec * sdim + s;
+} // END OF 5.4.2.
+
+
+/**
+/* [5.5.1.]
+ * @brief Compute partial mass loading for each (location, source, phi) element (= lsmpl).
+ *
+ * Each CUDA thread computes one flattened element of:
+ *
+ *     massloading_loc_source_phiD[location, source, phidec]
+ *
+ * Flattened layout:
+ *
+ *     tid = ((location * sdim) + source) * phidecdim + phidec
+ *
+ * @param N Total number of flattened elements:
+ *          locdim * sdim * phidecdim
+ * @param zdim Number of vertical grid intervals
+ * @param sdim Number of source points
+ * @param phidecdim Number of grain-size subdivisions
+ * @param zdelta Vertical grid spacing
+ * @param massloading_loc_source_phiD Output partial mass loading per location/source/phi
+ * @param ttlmlD Output total mass loading buffer, used by funcD01b
+ * @param sourceZD Source height array
+ * @param centX Deposit center X array indexed by (phidec, source, z)
+ * @param centY Deposit center Y array indexed by (phidec, source, z)
+ * @param cloud_sigma2 Variance array indexed by (phidec, source, z)
+ * @param locX Location X array for the current chunk
+ * @param locY Location Y array for the current chunk
+ * @param locZ Location Z array for the current chunk
+ * @param massreleased Released mass indexed by (phidec, source)
+ */
+__global__ void funcD01a(
+    int N,
+    int zdim,
+    int sdim,
+    int phidecdim,
+    float zdelta,
+    float *massloading_loc_source_phiD,
+    float *ttlmlD,
+    float *sourceZD,
+    float *centX,
+    float *centY,
+    float *cloud_sigma2,
+    float *locX,
+    float *locY,
+    float *locZ,
+    float *massreleased
+){
+    int j, s, z, phidec, ips, ipsz;
+    float depcentX, depcentY, sigma2, square_distance;
+
+    unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
+
+    if(tid < N){
+        massloading_loc_source_phiD[tid] = 0.0f;
+
+        /*
+         * Decode flattened thread index.
+         *
+         * Layout:
+         *   tid = ((j * sdim) + s) * phidecdim + phidec
+         *
+         * j      : location index within the current chunk
+         * s      : source index
+         * phidec : grain-size subdivision index
+         */
+        j      = tid / (phidecdim * sdim);
+        s      = (tid / phidecdim) % sdim;
+        phidec = tid % phidecdim;
+
+		/*
+		* Determine vertical layer index z such that
+		*   z * zdelta <= locZ[j] < (z + 1) * zdelta
+		
+         * Arrays centX, centY, and cloud_sigma2 are interpolated
+         * between z and z+1.
+         */
+        z = locZ[j] / zdelta;
+
+        /*
+         * ipsz indexes arrays flattened from:
+         *   [phidec][source][z]
+         *
+         * ips indexes arrays flattened from:
+         *   [phidec][source]
+         */
+		 
+		ipsz = idx_psz(phidec, s, z, sdim, zdim);
+		ips = idx_ps(phidec, s, sdim);
+
+        depcentX =
+            centX[ipsz + 1]
+            + (centX[ipsz] - centX[ipsz + 1])
+            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+
+        depcentY =
+            centY[ipsz + 1]
+            + (centY[ipsz] - centY[ipsz + 1])
+            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+
+        sigma2 =
+            cloud_sigma2[ipsz + 1]
+            + (cloud_sigma2[ipsz] - cloud_sigma2[ipsz + 1])
+            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+
+        square_distance =
+            pow((depcentX - locX[j]), 2)
+            + pow((depcentY - locY[j]), 2);
+		/*square_distance =
+            (depcentX - locX[j]) * (depcentX - locX[j])
+            + (depcentY - locY[j]) * (depcentY - locY[j]);*/
+
+        /*
+         * Only sources above the current location (locZ[j]) contribute
+         * to mass loading at that location.
+         */
+        if(locZ[j] < sourceZD[s]){
+            /* Original formulation: Bonadonna et al. (2005) */
+            massloading_loc_source_phiD[tid] =
+                1 / (M_2PI * sigma2)
+                * exp(-square_distance / (2 * sigma2))
+                * massreleased[ips];
+
+#ifdef TEPHRA2
+            /* Formulation used in Tephra2 and WT */
+            massloading_loc_source_phiD[tid] =
+                1 / (M_PI * sigma2)
+                * exp(-square_distance / sigma2)
+                * massreleased[ips];
+#endif
+        }
+
+        /*
+         * Note:
+         * This increment has no effect unless this if-block is changed
+         * to a while-loop. It is kept here to avoid changing behavior.
+         */
+        tid += blockDim.x * gridDim.x;
+    }
+} // END OF 5.5.1.
+
+
+/**
+ * [5.5.2]
+ * @brief Reduce partial mass loading over source and phi for each location.
+ *
+ * funcD01a produces:
+ *
+ *     massloading_loc_source_phiD[location, source, phidec]
+ *
+ * This kernel sums all source/phi contributions for each location:
+ *
+ *     ttlmlD[location] = sum over source and phidec
+ *
+ * @param N Total number of flattened massloading_loc_source_phiD elements:
+ *          locdim * sdim * phidecdim
+ * @param locdim Number of locations in the current chunk
+ * @param massloading_loc_source_phiD Partial mass loading array
+ * @param ttlmlD Output total mass loading per location
+ */
+__global__ void funcD01b(
+    int N,
+    int locdim,
+    float *massloading_loc_source_phiD,
+    float *ttlmlD
+){
+    unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
+
+    if(tid < locdim){
+        int n_per_location = N / locdim;
+
+        ttlmlD[tid] = 0.0f;
+
+        for(int i = 0; i < n_per_location; i++){
+            ttlmlD[tid] += massloading_loc_source_phiD[tid * n_per_location + i];
+        }
+    }
+} // END OF 5.5.2.
+
+/////////////////////[END OF THE PART 05]/////////////////////
+
+/*
+ * Write plume trajectory and particle source positions to files.
+ *
+ * plumetraj.txt:
+ *   Centerline of the plume obtained by solving the plume differential equations.
+ *   Each entry corresponds to a point along the plume axis.
+ *
+ * plumesourceposition.txt:
+ *   Discrete particle release points distributed along the plume axis.
+ *   These serve as sources of particle emission for the fall calculation.
+ */
+void write_plume_files(
+    int WRITE_COLUMN_FILES,
+    int SDIM_FOR_PLUME_CALC,
+    int SDIM_FOR_FALL_CALC,
+    double *plume_trajX,
+    double *plume_trajY,
+    double *plume_trajZ,
+    double *plume_trajR,
+    double *plume_trajT,
+    double *sourceX,
+    double *sourceY,
+    double *sourceZ,
+    double *sourceRadius,
+    double *sourceT
+){
+    if(WRITE_COLUMN_FILES){
+        FILE *outfile = fopen("plumetraj.txt", "w");
+        const char *header = "calc_step\tx\ty\tz\tR\ttime\n";
+        printxyzq(outfile, header, SDIM_FOR_PLUME_CALC,
+                  plume_trajX, plume_trajY, plume_trajZ,
+                  plume_trajR, plume_trajT);
+        fclose(outfile);
+    }
+
+    if(WRITE_COLUMN_FILES){
+        FILE *outfile = fopen("plumesourceposition.txt", "w");
+        const char *header = "source\tx\ty\tz\tR\ttime\n";
+        printxyzq(outfile, header, SDIM_FOR_FALL_CALC,
+                  sourceX, sourceY, sourceZ,
+                  sourceRadius, sourceT);
+        fclose(outfile);
+    }
 }
+
+
+
+
+
 
 /*
  * Free all dynamically allocated memory used in the simulation.
@@ -2600,27 +3224,6 @@ void write_phi_s_table(
     fclose(outfile);
 }
 
-/*
- * Compute total released mass from the plume for the current phi class.
- *
- * Sum massreleased_per_ds_and_phidec over all (s, phidec),
- * but only for source indices s < SDIMCUTOFF.
- */
-double compute_total_released_mass(double *massreleased_per_ds_and_phidec){
-	double totalofthefraction = 0.0;
-	int s;
-	
-	for(int i = 0; i < SDIM_FOR_FALL_CALC * PHIDECDIM; i++){
-		s = i % SDIM_FOR_FALL_CALC;
-		if(s < SDIMCUTOFF){
-			totalofthefraction += massreleased_per_ds_and_phidec[i];
-		}else{
-			totalofthefraction += 0;
-		}
-		
-	}
-	return(totalofthefraction);
-}
 
 /*
  * Set all elements of the array to zero.
@@ -2631,230 +3234,10 @@ void clear_array(int dim, double *ary){
     }
 }
 
-/*
- * drift_from_a_certain_source (F20)
- * Compute the center position and dispersion of a particle cloud
- * released from each point along the plume axis.
- *
- * For each source point s and height interval z, this function calculates:
- * - cloud_center_x[phidec][s][z]     : X-coordinate of cloud center
- *                                (wind drift + transport along the plume)
- * - cloud_center_y[phidec][s][z]     : Y-coordinate of cloud center
- *                                (wind drift + transport along the plume)
- * - cloud_sigma2[phidec][s][z] : variance of horizontal dispersion of the cloud
- *
- * A "cloud" is a group of particles that:
- * - share the same grain size (same phidec)
- * - are released from the same source point s
- */
-void drift_from_a_certain_source(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2){
-	int s, z, phidec, idz, idz_s;
-	int z_source;		// z_source means interval count of z axis of just above the source height
-	double residue_up, fall_time_residue_up;
-	double falltime, ttldriftX, ttldriftY;
-
-	for(int idx = 0; idx < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx++){		// idx is count for driftXY_s and cloud_sigma2
-		z = idx % ZDIM;
-		s = (idx / ZDIM) % SDIM_FOR_FALL_CALC;
-		phidec = idx / (ZDIM * SDIM_FOR_FALL_CALC);
-		z_source = ceil(source_height[s] / Z_DELTA); // source_height means source height
-		if(z < z_source){
-			idz = (phidec * ZDIM) + z; idz_s = (phidec * ZDIM) + z_source; // idz is count for driftXY and TotalFallTime
-			residue_up = source_height[s] - (z_source - 1) * Z_DELTA;
-			fall_time_residue_up =  (TotalFallTime[idz_s - 1] - TotalFallTime[idz_s]) * residue_up / Z_DELTA;
-
-			falltime = TotalFallTime[idz] - TotalFallTime[idz_s - 1] + fall_time_residue_up;
-
-			ttldriftX = (driftX[idz] - driftX[idz_s - 1]) + (driftX[idz_s - 1] - driftX[idz_s]) * residue_up / Z_DELTA;
-			ttldriftY = (driftY[idz] - driftY[idz_s - 1]) + (driftY[idz_s - 1] - driftY[idz_s]) * residue_up / Z_DELTA;
-
-			//printf("phidec=%d\ts=%d\tz=%d\tdrftX=%1.4f\tttldrftX = %1.4f\n", phidec, s, z, driftX[idz], ttldriftX);
-
-			cloud_center_x[idx] = source_x[s] + ttldriftX;
-			cloud_center_y[idx] = source_y[s] + ttldriftY;
-			cloud_sigma2[idx] = calc_cloud_sigma2(sourceRadius[s] * PLUME_RADIUS_CORRECTION, falltime); // F21
-		}
-	}
-} // End of the function (F20)
 
 
-/*
- * Flatten 3D index (phidec, s, z) into 1D array index.
- *
- * Data layout:
- *   data[phidec][s][z] is stored as a contiguous 1D array:
- *     index = phidec * (sdim * zdim) + s * zdim + z
- *
- * Dimensions:
- *   phidec : grain size class (decimal phi)
- *   s      : source index along plume
- *   z      : vertical level
- */
-static __host__ __device__ inline int
-idx_psz(int phidec, int s, int z, int sdim, int zdim)
-{
-    return phidec * sdim * zdim + s * zdim + z;
-}
-
-/*
- * Flatten 2D index (phidec, s) into 1D array index.
- *
- * Data layout:
- *   data[phidec][s] is stored as:
- *     index = phidec * sdim + s
- *
- * Dimensions:
- *   phidec : grain size class (decimal phi)
- *   s      : source index along plume
- */
-static __host__ __device__ inline int
-idx_ps(int phidec, int s, int sdim)
-{
-    return phidec * sdim + s;
-}
 
 #ifdef CUDA
-
-
-/*
- * Compute mass loading at ground locations using GPU acceleration.
- *
- * This (calc_mass_loading) function:
- * - prepares host buffers (double → float conversion)
- * - allocates and initializes GPU buffers
- * - launches CUDA kernels for mass loading computation
- * - retrieves total mass loading per location
- *
- * GPU computation:
- * - funcD01a: compute partial mass loading for each (location, source, phidec)
- * - funcD01b: reduce over (source, phidec) to obtain total per location
- *
- * Data layout:
- * - PSZ: (phidec, source, z)
- * - LSP: (location, phidec, source)
- *
- * Note:
- * Computation is performed in chunks over locations for memory efficiency.
- */
-void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *ttlml, double *massreleased){
-	/* 
-	* D in the name of parameter (e.g. ttlmlD) comes from "Device", which means such parameters
-	* are used in GPU calculation
-	* F in the name of parameter (e.g. ttlmlF) means such parameters are temporaly ones in CPU
-	*/
-
-	int chunk_locdim = 8192;  // Empirically tuned on NVIDIA GeForce RTX 3060; output verified by diff
-
-	/* 1. Define size of arrays used in GPU */
-	/*
-	* PSZ : size of arrays indexed by (phidec, source, height_interval)
-	* LSP : size of arrays indexed by (location, phidec, source)
-	*/
-	size_t LSP;
-	size_t PSZ; 
-	
-	/* ---- index definitions --------------------------------------
-	 * phidec : phi (grain size) subdivision index
- 	 * s      : source index along plume axis
- 	 * z      : vertical layer index
-	 */
-	//int phidec, s, z;
-
-	/* ---- flattened indices -----------------------------------------
-	* Multi-dimensional indices (phidec, source, z) are mapped to
- 	* 1D arrays for GPU memory access (CUDA global memory is linear).
-	*
-	* ipsz : index for (phidec, source, height_interval)
-	* ips  : index for (phidec, source)
-	*/
-	//int ipsz;
-	//int ips;
-
-	PSZ = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZ = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
-	LSP = (size_t)chunk_locdim * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
-
-	/* end of 1.*/
-
-	/* 2. Host Buffer Allocation */
-
-	float *ttlmlF;
-	ttlmlF = (float *)malloc(chunk_locdim * sizeof(float));
-	if (!ttlmlF) {
-    fprintf(stderr, "Error: malloc failed for ttlmlF\n");
-    exit(EXIT_FAILURE);
-	}
-
-	// Allocate host buffers used for double-to-float conversion
-	float *sourceZF, *centXF, *centYF, *sigsqF, *locXF, *locYF, *locZF, *massreleasedF;
-	sourceZF = (float *)malloc(SDIMCUTOFF * sizeof(float));
-	centXF = (float *)malloc(PSZ * sizeof(float));
-	centYF = (float *)malloc(PSZ * sizeof(float));
-	sigsqF = (float *)malloc(PSZ * sizeof(float));
-
-	locXF = (float *)malloc(chunk_locdim * sizeof(float));
-	locYF = (float *)malloc(chunk_locdim * sizeof(float));
-	locZF = (float *)malloc(chunk_locdim * sizeof(float));
-
-	massreleasedF = (float *)malloc(PHIDECDIM * SDIMCUTOFF * sizeof(float));
-	
-	if (!ttlmlF || !sourceZF || !centXF || !centYF || !sigsqF ||
-    !locXF || !locYF || !locZF || !massreleasedF) {
-    fprintf(stderr, "Error: malloc failed for host buffers\n");
-    exit(EXIT_FAILURE);
-	}	
-
-	/* end of 2.*/
-
-	/* 3-4. Device Buffer Allocation */
-	Buffers b;
-
-	b.PSZ = PSZ;
-	b.LSP  = LSP;
-
-	/* host bridge: required before prepare */
-	b.host.ttlmlF = ttlmlF;
-
-	b.host.sourceZF = sourceZF;
-	b.host.centXF   = centXF;
-	b.host.centYF   = centYF;
-	b.host.sigsqF   = sigsqF;
-
-	b.host.locXF = locXF;
-	b.host.locYF = locYF;
-	b.host.locZF = locZF;
-
-	b.host.massreleasedF = massreleasedF;
-
-	prepare_mass_loading(	//Steps 3-5
-		&b,
-		sourceZ,
-		cloud_center_x,
-		cloud_center_y,
-		cloud_sigma2,
-		massreleased,
-    	chunk_locdim
-	);
-	
-	/* Loop for compute mass loading */
-	for (int loc0 = 0; loc0 < LOCDIM; loc0 += chunk_locdim) {
-
-		int locN = chunk_locdim;
-		if (loc0 + locN > LOCDIM) {
-			locN = LOCDIM - loc0;
-		}
-
-		/*
-		* Step 6 of calc_mass_loading:
-		* Per-chunk GPU processing pipeline.
-		*/
-		compute_mass_loading(&b, locX, locY, locZ, ttlml, loc0, locN);
-	}
-		/* Step 7 Clean up*/
-		cleanup_buffers(&b);
-	/* end of host bridge */
-
-} // End of the function
-
 /* Step 3-5 of calc_mass_loading:
  * Preparation stage of calc_mass_loading.
  * Allocate device buffers and initialize fixed data.
@@ -3344,181 +3727,6 @@ static void cleanup_buffers(Buffers *b)
 /* end of Step 7 */
 
 
-/**
- * @brief Compute partial mass loading for each (location, source, phi) element (= lsmpl).
- *
- * Each CUDA thread computes one flattened element of:
- *
- *     massloading_loc_source_phiD[location, source, phidec]
- *
- * Flattened layout:
- *
- *     tid = ((location * sdim) + source) * phidecdim + phidec
- *
- * @param N Total number of flattened elements:
- *          locdim * sdim * phidecdim
- * @param zdim Number of vertical grid intervals
- * @param sdim Number of source points
- * @param phidecdim Number of grain-size subdivisions
- * @param zdelta Vertical grid spacing
- * @param massloading_loc_source_phiD Output partial mass loading per location/source/phi
- * @param ttlmlD Output total mass loading buffer, used by funcD01b
- * @param sourceZD Source height array
- * @param centX Deposit center X array indexed by (phidec, source, z)
- * @param centY Deposit center Y array indexed by (phidec, source, z)
- * @param cloud_sigma2 Variance array indexed by (phidec, source, z)
- * @param locX Location X array for the current chunk
- * @param locY Location Y array for the current chunk
- * @param locZ Location Z array for the current chunk
- * @param massreleased Released mass indexed by (phidec, source)
- */
-__global__ void funcD01a(
-    int N,
-    int zdim,
-    int sdim,
-    int phidecdim,
-    float zdelta,
-    float *massloading_loc_source_phiD,
-    float *ttlmlD,
-    float *sourceZD,
-    float *centX,
-    float *centY,
-    float *cloud_sigma2,
-    float *locX,
-    float *locY,
-    float *locZ,
-    float *massreleased
-){
-    int j, s, z, phidec, ips, ipsz;
-    float depcentX, depcentY, sigma2, square_distance;
-
-    unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
-
-    if(tid < N){
-        massloading_loc_source_phiD[tid] = 0.0f;
-
-        /*
-         * Decode flattened thread index.
-         *
-         * Layout:
-         *   tid = ((j * sdim) + s) * phidecdim + phidec
-         *
-         * j      : location index within the current chunk
-         * s      : source index
-         * phidec : grain-size subdivision index
-         */
-        j      = tid / (phidecdim * sdim);
-        s      = (tid / phidecdim) % sdim;
-        phidec = tid % phidecdim;
-
-		/*
-		* Determine vertical layer index z such that
-		*   z * zdelta <= locZ[j] < (z + 1) * zdelta
-		
-         * Arrays centX, centY, and cloud_sigma2 are interpolated
-         * between z and z+1.
-         */
-        z = locZ[j] / zdelta;
-
-        /*
-         * ipsz indexes arrays flattened from:
-         *   [phidec][source][z]
-         *
-         * ips indexes arrays flattened from:
-         *   [phidec][source]
-         */
-		 
-		ipsz = idx_psz(phidec, s, z, sdim, zdim);
-		ips = idx_ps(phidec, s, sdim);
-
-        depcentX =
-            centX[ipsz + 1]
-            + (centX[ipsz] - centX[ipsz + 1])
-            * (zdelta * (z + 1) - locZ[j]) / zdelta;
-
-        depcentY =
-            centY[ipsz + 1]
-            + (centY[ipsz] - centY[ipsz + 1])
-            * (zdelta * (z + 1) - locZ[j]) / zdelta;
-
-        sigma2 =
-            cloud_sigma2[ipsz + 1]
-            + (cloud_sigma2[ipsz] - cloud_sigma2[ipsz + 1])
-            * (zdelta * (z + 1) - locZ[j]) / zdelta;
-
-        square_distance =
-            pow((depcentX - locX[j]), 2)
-            + pow((depcentY - locY[j]), 2);
-		/*square_distance =
-            (depcentX - locX[j]) * (depcentX - locX[j])
-            + (depcentY - locY[j]) * (depcentY - locY[j]);*/
-
-        /*
-         * Only sources above the current location (locZ[j]) contribute
-         * to mass loading at that location.
-         */
-        if(locZ[j] < sourceZD[s]){
-            /* Original formulation: Bonadonna et al. (2005) */
-            massloading_loc_source_phiD[tid] =
-                1 / (M_2PI * sigma2)
-                * exp(-square_distance / (2 * sigma2))
-                * massreleased[ips];
-
-#ifdef TEPHRA2
-            /* Formulation used in Tephra2 and WT */
-            massloading_loc_source_phiD[tid] =
-                1 / (M_PI * sigma2)
-                * exp(-square_distance / sigma2)
-                * massreleased[ips];
-#endif
-        }
-
-        /*
-         * Note:
-         * This increment has no effect unless this if-block is changed
-         * to a while-loop. It is kept here to avoid changing behavior.
-         */
-        tid += blockDim.x * gridDim.x;
-    }
-}
-
-
-/**
- * @brief Reduce partial mass loading over source and phi for each location.
- *
- * funcD01a produces:
- *
- *     massloading_loc_source_phiD[location, source, phidec]
- *
- * This kernel sums all source/phi contributions for each location:
- *
- *     ttlmlD[location] = sum over source and phidec
- *
- * @param N Total number of flattened massloading_loc_source_phiD elements:
- *          locdim * sdim * phidecdim
- * @param locdim Number of locations in the current chunk
- * @param massloading_loc_source_phiD Partial mass loading array
- * @param ttlmlD Output total mass loading per location
- */
-__global__ void funcD01b(
-    int N,
-    int locdim,
-    float *massloading_loc_source_phiD,
-    float *ttlmlD
-){
-    unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
-
-    if(tid < locdim){
-        int n_per_location = N / locdim;
-
-        ttlmlD[tid] = 0.0f;
-
-        for(int i = 0; i < n_per_location; i++){
-            ttlmlD[tid] += massloading_loc_source_phiD[tid * n_per_location + i];
-        }
-    }
-}
-
 /*
  * Accumulate mass loading for the current integer phi class.
  *
@@ -3598,114 +3806,7 @@ void calc_mass_loading_location(int phiint, double *massloading_loc_source_phi, 
 
 /* NON CUDA FUNCTIONS (END)*/
 
-/*
- * Compute fall time and wind drift for a particle of a given grain size.
- *
- * Starting from plume height Ht (= h[zmax]), this function integrates
- * particle settling downward through each vertical interval.
- *
- * Outputs:
- * - ttlfalltime[z] : elapsed fall time from Ht to height level z [s]
- * - driftX[z]      : accumulated X-direction drift from Ht to height level z [m]
- * - driftY[z]      : accumulated Y-direction drift from Ht to height level z [m]
- *
- * Notes:
- * - The top interval is h[zmax] → h[zmax-1].
- * - Lower intervals have thickness Z_DELTA.
- * - In the default formulation, fall velocity and wind velocity are averaged
- *   between the top and bottom of each interval.
- * - Under TEPHRA2, the upper-level wind and terminal velocity are used.
- */
-void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime){
-	// F10
-	
-#ifdef TEPHRA2
-	double v0, falltime;
-#else
-	double v1, v0, falltime;
-#endif
 
-	//printf("\n\nh\tp\tt\tair_density\tair_viscosity\tRe\ttermfallv\n");
-				// zmax is count for Ht
-	v0 = calc_particle_terminal_velocity(h[zmax-1], grainsize, PUMICE_DENSITY, atmP[zmax-1], atmT[zmax-1]);
-	
-#ifdef TEPHRA2
-	falltime = (h[zmax]-h[zmax-1]) / (v0);
-	driftX[zmax-1] = falltime * (windX[zmax]);
-	driftY[zmax-1] = falltime * (windY[zmax]);
-#else
-	v1 = calc_particle_terminal_velocity(h[zmax], grainsize, PUMICE_DENSITY, atmP[zmax], atmT[zmax]);	
-	falltime = (h[zmax]-h[zmax-1]) / ((v1 + v0) / 2);
-	driftX[zmax-1] = falltime * (windX[zmax-1] + windX[zmax]) / 2;
-	driftY[zmax-1] = falltime * (windY[zmax-1] + windY[zmax]) / 2;
-#endif
-		
-	ttlfalltime[zmax-1] = falltime;
-
-	for(int z = zmax - 2; z >= 0; z--){ // The Loop 166
-		v0 = calc_particle_terminal_velocity(h[z], grainsize, PUMICE_DENSITY, atmP[z], atmT[z]);
-#ifdef TEPHRA2
-		falltime = Z_DELTA / (v0);
-		driftX[z] = driftX[z+1] + falltime * (windX[z+1]);
-		driftY[z] = driftY[z+1] + falltime * (windY[z+1]);		
-#else
-		v1 = calc_particle_terminal_velocity(h[z+1], grainsize, PUMICE_DENSITY, atmP[z+1], atmT[z+1]);
-		falltime = Z_DELTA / ((v1 + v0) / 2);
-		driftX[z] = driftX[z+1] + falltime * (windX[z+1] + windX[z]) / 2;
-		driftY[z] = driftY[z+1] + falltime * (windY[z+1] + windY[z]) / 2;
-#endif
-		ttlfalltime[z] = ttlfalltime[z+1] + falltime;
-	}
-}
-
-/*
- * Compute released particle mass along the plume axis for one decimal phi class.
- *
- * For a given grain size (phi), this function estimates how much particle mass
- * is released from each source interval s along the plume axis.
- *
- * The release distribution is controlled by:
- * - terminal fall velocity of the particle
- * - wind speed at plume height
- * - plume thickness
- * - grain-size PDF fraction
- *
- * Output:
- * - massreleased[phidecimal][s] : released mass from source interval s
- */
-void compute_mass_release_along_plume(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased){
-	                               //no need of phidecimal: phi already has decimal number.
-	double vphi, vw;
-	double beta;
-	double demon1, demon2;
-	double pdf_fraction;
-	double grainsize;
-
-	grainsize = pow(2, -phi) * 0.001;
-
-	pdf_fraction = calc_pdf_fraction(phi);
-
-	vw = pow(windX[zmax], 2) + pow(windY[zmax], 2);
-	vw = sqrt(vw);
-	vphi = calc_particle_terminal_velocity(h[zmax], grainsize, PUMICE_DENSITY, atmP[zmax], atmT[zmax]);
-
-	beta = vphi / (vw * PLUME_THICKNESS);
-	
-	//printf("%1.1f\t%1.4e\n", phi, vphi);
-
-	for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
-		if(s==0){
-			demon1 = 0;
-		}else{
-			demon1 = -1 * beta * (s) * S_DELTA_FOR_FALL_CALC;
-		}
-		
-		demon2 = -1 * beta * (s + 1) * S_DELTA_FOR_FALL_CALC;
-		massreleased[s + phidecimal * SDIM_FOR_FALL_CALC] = ERUPTION_MASS * (exp(demon1) - exp(demon2)) * pdf_fraction;
-		//printf("%1.4e\t%1.4e\n", demon1, demon2);
-		//printf("%1.1f\t%d\t%1.4e\n", phi, s, massreleased[s + phidecimal * SDIM_FOR_FALL_CALC]);
-	}
-}
 
 void set_coordinates_to_location_properties(DEP *location_properties, double *locX, double *locY, double *locZ){
   for(int j = 0; j < LOCDIM ; j++){
@@ -3800,53 +3901,6 @@ void write_deposit_summary(DEP *location_properties){
 	fclose(outfile);
 }
 
-
-/*
- * Compute variance (sigma^2) of particle cloud dispersion.
- *
- * This function estimates the horizontal spread of a particle cloud
- * originating from a source of finite radius, based on fall time.
- *
- * Two regimes are used following Bonadonna et al. (2005):
- *
- * - Coarse particles (short fall time):
- *     Diffusion-dominated spreading (Eq. 6)
- *
- * - Fine particles (long fall time):
- *     Turbulent eddy diffusion dominates (Eq. 8)
- *
- * Inputs:
- *   source_radius :
- *     radius of the source (plume cross-section) [m]
- *
- *   falltime :
- *     particle fall time from release height [s]
- *
- * Output:
- *   cloud_sigma2 :
- *     variance (sigma^2) of horizontal dispersion [m^2]
- *
- * Notes:
- * - virtual_falltime represents the time required for a point source
- *   to spread to the initial plume radius.
- * - FALL_TIME_THRESHOLD separates coarse and fine particle regimes.
- */
-double calc_cloud_sigma2(double source_radius, double falltime) {
-	// time needed for point source to diffuse until sigma equals to the plume radius
-	double virtual_falltime = 0.0;
-	double cloud_sigma2 = 0.0;
-
-	if (falltime < FALL_TIME_THRESHOLD){
-		// coarse particle	Bonadonna+(2005) Eq.6
-		virtual_falltime = source_radius * source_radius / (4 * DIFFUSION_COEFFICIENT);
-		cloud_sigma2 = 4 * DIFFUSION_COEFFICIENT * (falltime + virtual_falltime);
-	}else{
-		// fine particle	Bonadonna+(2005) Eq.8
-		virtual_falltime = pow((5 * source_radius * source_radius) / (8 * EDDY_CONST), 0.4);
-		cloud_sigma2 = 8 * EDDY_CONST / 5 * pow(falltime + virtual_falltime, 2.5);
-	}
-	return(cloud_sigma2);
-} // End of the function
 
 
 /*********************** */
@@ -4759,43 +4813,6 @@ void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double 
 		if(WRITE_DEPCENT_TRAJECTORY) fclose(outfile);
 }
 
-/*
- * Determine SDIMCUTOFF for the current integer phi class.
- *
- * SDIMCUTOFF is the effective upper limit of source points used in
- * mass-loading calculation. Source points farther than this cutoff are
- * ignored when their estimated contribution becomes smaller than the
- * configured minimum threshold.
- *
- * The contribution is estimated from:
- *   released mass from source s / cloud_sigma2 at ground level
- *
- * Inputs:
- * - cloud_sigma2[phidec][s][z]          : cloud dispersion variance
- * - massreleased_per_ds[s].mass_from_ds : released mass per source and phi
- */
-void get_sdimcutoff(
-    double *cloud_sigma2,
-    SEG *massreleased_per_ds,
-    int phiint
-){
-    double estimated_contribution;
-
-    for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
-        /*
-         * Use phidec = 0 and z = 0 as representative values
-         * for the current source point s.
-         */
-        estimated_contribution =
-            massreleased_per_ds[s].mass_from_ds[phiint]
-            / cloud_sigma2[s * ZDIM];
-
-        if(estimated_contribution < MINIMUM_CONTRIBUTION * S_DELTA_FOR_FALL_CALC){
-            SDIMCUTOFF = s;
-            break;
-        }
-    }
-}
 
 /*
  * Debug utility:

@@ -1961,53 +1961,24 @@ void makewindstruct(int imax, double *alt, double *v, double *dir, double *temp,
 
 /////////////////////[END OF THE PART 03]/////////////////////
 
+/////////////////////////////////[PART 04]///////////////////////////////// 
+//
+//
+// ==============================
+// [4] Atmosphere & Wind
+// ==============================
+// [4.1] build_atmosphere_tables
+//   [4.1.1] interpolate_atmosphere_and_wind
+//       [4.1.1.1] calc_Tatm
+//       [4.1.1.2] calc_Patm
+//       [4.1.1.3] compute_air_density
+//       [4.1.1.4] compute_pressure_gradient
+//       [4.1.1.5] interpolate_wind_speed
+//       [4.1.1.6] interpolate_wind_direction_across_360
 
-/*
- * Write plume trajectory and particle source positions to files.
+
+/* [4.1.]
  *
- * plumetraj.txt:
- *   Centerline of the plume obtained by solving the plume differential equations.
- *   Each entry corresponds to a point along the plume axis.
- *
- * plumesourceposition.txt:
- *   Discrete particle release points distributed along the plume axis.
- *   These serve as sources of particle emission for the fall calculation.
- */
-void write_plume_files(
-    int WRITE_COLUMN_FILES,
-    int SDIM_FOR_PLUME_CALC,
-    int SDIM_FOR_FALL_CALC,
-    double *plume_trajX,
-    double *plume_trajY,
-    double *plume_trajZ,
-    double *plume_trajR,
-    double *plume_trajT,
-    double *sourceX,
-    double *sourceY,
-    double *sourceZ,
-    double *sourceRadius,
-    double *sourceT
-){
-    if(WRITE_COLUMN_FILES){
-        FILE *outfile = fopen("plumetraj.txt", "w");
-        const char *header = "calc_step\tx\ty\tz\tR\ttime\n";
-        printxyzq(outfile, header, SDIM_FOR_PLUME_CALC,
-                  plume_trajX, plume_trajY, plume_trajZ,
-                  plume_trajR, plume_trajT);
-        fclose(outfile);
-    }
-
-    if(WRITE_COLUMN_FILES){
-        FILE *outfile = fopen("plumesourceposition.txt", "w");
-        const char *header = "source\tx\ty\tz\tR\ttime\n";
-        printxyzq(outfile, header, SDIM_FOR_FALL_CALC,
-                  sourceX, sourceY, sourceZ,
-                  sourceRadius, sourceT);
-        fclose(outfile);
-    }
-}
-
-/*
  * Build atmospheric and wind profiles on the simulation vertical grid.
  *
  * This function interpolates raw atmospheric data (read by read_wind_file)
@@ -2078,6 +2049,153 @@ void build_atmosphere_tables(
         wind_v, wind_dir, wind_tmp, wind_pres	// input data (argv[2])
     );
 }
+
+
+/* [4.1.1.]
+ * Interpolate atmospheric and wind data onto the simulation height grid.
+ *
+ * For each height level h[z], this function computes:
+ * - atmospheric temperature atmT[z]
+ * - atmospheric pressure atmP[z]
+ * - wind velocity components windX[z], windY[z]
+ *
+ * Input wind data are read from the atmospheric file and stored in
+ * wind_v, wind_dir, wind_tmp, and wind_pres.
+ *
+ * Notes:
+ * - Input pressure is converted from hPa to Pa.
+ * - Wind direction and speed are converted to X/Y components.
+ * - If WRITE_COLUMN_FILES is enabled, the interpolated table is written
+ *   to atmosphere_used.txt.
+ */
+void interpolate_atmosphere_and_wind(int windlinenum, double *h, double *atmT, double *atmP, double *windX, double *windY, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres){
+	double dir, v;
+	double *vary, *dirary;
+	vary = (double *)malloc(ZDIM * sizeof(double)), dirary = (double *)malloc(ZDIM * sizeof(double));
+	
+	//printf("windlinenum = %d\n", windlinenum);
+	
+	
+	FILE *outfile;
+	if(WRITE_COLUMN_FILES){
+		outfile = fopen("atmosphere_used.txt", "w");
+		fprintf(outfile, "z\th(m)\twind_dir\twind_v(m/s)\twindX(m/s)\twindY(m/s)\ttemp(K)\tpres(Pa)\n");		
+	}
+
+	for(int z = 0; z < ZDIM; z++){
+		if (z == 0){
+		atmT[z] = wind_tmp[0];
+		atmP[z] = wind_pres[0] * 100; // hPa -> Pa
+		v = wind_v[0];
+		dir = wind_dir[0];
+		vary[z] = v;
+		dirary[z] = dir;
+		windY[z] = v * cos(dir / 360 * 2 * M_PI);
+		windX[z] = v * sin(dir / 360 * 2 * M_PI);
+		}else{
+		atmT[z] = calc_Tatm(h[z], windlinenum);
+		atmP[z] = calc_Patm(h[z], windlinenum);
+		v = interpolate_wind_speed(h[z], windlinenum);
+		dir = interpolate_wind_direction_across_360(h[z], windlinenum);
+		vary[z] = v;
+		dirary[z] = dir;
+		windY[z] = v * cos(dir / 360 * 2 * M_PI);
+		windX[z] = v * sin(dir / 360 * 2 * M_PI);
+		}
+		if(WRITE_COLUMN_FILES){fprintf(outfile, "%d\t%1.0f\t%1.0f\t%1.1f\t%1.1f\t%1.1f\t%1.1f\t%1.1f\n", z, h[z], dirary[z], vary[z], windX[z], windY[z], atmT[z], atmP[z]);}
+	}
+	free(vary); free(dirary);
+	if(WRITE_COLUMN_FILES){fclose(outfile);}
+}
+
+/////////////////////[END OF THE PART 04]/////////////////////
+
+/////////////////////////////////[PART 05]///////////////////////////////// 
+//
+//
+/// ==============================
+// [5] Mass Loading Core
+// ==============================
+// [5.1] calculate_massloading
+
+// --- Release from plume ---
+// [5.2.1.]  compute_mass_release_along_plume
+// [5.2.2.]  compute_total_released_mass
+// [5.2.3.]  get_sdimcutoff
+
+// --- Diffusion and drift in the air ---
+// [5.3.1.]  compute_falltime_and_drift_profile
+// [5.3.2.]  drift_from_a_certain_source
+// [5.3.3.]  calc_cloud_sigma2
+
+// --- CPU mass loading ---
+// [5.4.]  calc_mass_loading
+
+// --- CUDA backend ---
+// [5.5.1.]  funcD01a
+// [5.5.2.]  funcD01b
+
+// --- GPU buffer / wrapper ---
+// [5.6.1.]  prepare_mass_loading
+// [5.6.2.]  compute_mass_loading
+// [5.6.3.]  cleanup_buffers
+
+// [5.1.8.1]  allocate_device_buffers_struct
+// [5.1.8.2]  pack_fixed_data_buffers
+// [5.1.8.3]  copy_fixed_data_to_device_buffers
+// [5.1.8.4]  pack_location_data_buffers
+// [5.1.8.5]  copy_location_data_to_device_buffers
+// [5.1.8.6]  launch_mass_loading_kernels_buffers
+// [5.1.8.7]  copy_result_to_host_buffers
+
+
+/////////////////////[END OF THE PART 05]/////////////////////
+
+/*
+ * Write plume trajectory and particle source positions to files.
+ *
+ * plumetraj.txt:
+ *   Centerline of the plume obtained by solving the plume differential equations.
+ *   Each entry corresponds to a point along the plume axis.
+ *
+ * plumesourceposition.txt:
+ *   Discrete particle release points distributed along the plume axis.
+ *   These serve as sources of particle emission for the fall calculation.
+ */
+void write_plume_files(
+    int WRITE_COLUMN_FILES,
+    int SDIM_FOR_PLUME_CALC,
+    int SDIM_FOR_FALL_CALC,
+    double *plume_trajX,
+    double *plume_trajY,
+    double *plume_trajZ,
+    double *plume_trajR,
+    double *plume_trajT,
+    double *sourceX,
+    double *sourceY,
+    double *sourceZ,
+    double *sourceRadius,
+    double *sourceT
+){
+    if(WRITE_COLUMN_FILES){
+        FILE *outfile = fopen("plumetraj.txt", "w");
+        const char *header = "calc_step\tx\ty\tz\tR\ttime\n";
+        printxyzq(outfile, header, SDIM_FOR_PLUME_CALC,
+                  plume_trajX, plume_trajY, plume_trajZ,
+                  plume_trajR, plume_trajT);
+        fclose(outfile);
+    }
+
+    if(WRITE_COLUMN_FILES){
+        FILE *outfile = fopen("plumesourceposition.txt", "w");
+        const char *header = "source\tx\ty\tz\tR\ttime\n";
+        printxyzq(outfile, header, SDIM_FOR_FALL_CALC,
+                  sourceX, sourceY, sourceZ,
+                  sourceRadius, sourceT);
+        fclose(outfile);
+    }
+}
+
 
 
 
@@ -3682,62 +3800,6 @@ void write_deposit_summary(DEP *location_properties){
 	fclose(outfile);
 }
 
-/*
- * Interpolate atmospheric and wind data onto the simulation height grid.
- *
- * For each height level h[z], this function computes:
- * - atmospheric temperature atmT[z]
- * - atmospheric pressure atmP[z]
- * - wind velocity components windX[z], windY[z]
- *
- * Input wind data are read from the atmospheric file and stored in
- * wind_v, wind_dir, wind_tmp, and wind_pres.
- *
- * Notes:
- * - Input pressure is converted from hPa to Pa.
- * - Wind direction and speed are converted to X/Y components.
- * - If WRITE_COLUMN_FILES is enabled, the interpolated table is written
- *   to atmosphere_used.txt.
- */
-void interpolate_atmosphere_and_wind(int windlinenum, double *h, double *atmT, double *atmP, double *windX, double *windY, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres){
-	double dir, v;
-	double *vary, *dirary;
-	vary = (double *)malloc(ZDIM * sizeof(double)), dirary = (double *)malloc(ZDIM * sizeof(double));
-	
-	//printf("windlinenum = %d\n", windlinenum);
-	
-	
-	FILE *outfile;
-	if(WRITE_COLUMN_FILES){
-		outfile = fopen("atmosphere_used.txt", "w");
-		fprintf(outfile, "z\th(m)\twind_dir\twind_v(m/s)\twindX(m/s)\twindY(m/s)\ttemp(K)\tpres(Pa)\n");		
-	}
-
-	for(int z = 0; z < ZDIM; z++){
-		if (z == 0){
-		atmT[z] = wind_tmp[0];
-		atmP[z] = wind_pres[0] * 100; // hPa -> Pa
-		v = wind_v[0];
-		dir = wind_dir[0];
-		vary[z] = v;
-		dirary[z] = dir;
-		windY[z] = v * cos(dir / 360 * 2 * M_PI);
-		windX[z] = v * sin(dir / 360 * 2 * M_PI);
-		}else{
-		atmT[z] = calc_Tatm(h[z], windlinenum);
-		atmP[z] = calc_Patm(h[z], windlinenum);
-		v = interpolate_wind_speed(h[z], windlinenum);
-		dir = interpolate_wind_direction_across_360(h[z], windlinenum);
-		vary[z] = v;
-		dirary[z] = dir;
-		windY[z] = v * cos(dir / 360 * 2 * M_PI);
-		windX[z] = v * sin(dir / 360 * 2 * M_PI);
-		}
-		if(WRITE_COLUMN_FILES){fprintf(outfile, "%d\t%1.0f\t%1.0f\t%1.1f\t%1.1f\t%1.1f\t%1.1f\t%1.1f\n", z, h[z], dirary[z], vary[z], windX[z], windY[z], atmT[z], atmP[z]);}
-	}
-	free(vary); free(dirary);
-	if(WRITE_COLUMN_FILES){fclose(outfile);}
-}
 
 /*
  * Compute variance (sigma^2) of particle cloud dispersion.

@@ -102,9 +102,69 @@ int ZDIM;   							// number of step (Z interval) for fall calculation
 int LOCDIM; 							// number of locations to calc
 
 
+
+
+/*
+ * Global state variables for plume calculation.
+ *
+ * These variables are mainly used by plume_calculation() and
+ * advance_plume_state_rk4(). They represent the current plume state,
+ * atmospheric conditions, and model constants during plume integration.
+ *
+ * Note:
+ * These are kept global to avoid passing a large number of tightly coupled
+ * plume-state variables through the RK4 integration functions.
+ */
+
+double g_dir;
+
+double Ra =  285;
+double Rg0 =  462;
+//double g =  9.81;
+
+
+double t0 =  293;	//293;
+double x, north, east;	// horizontal position; x means max length
+
+double p = 100000;	//101325.0;
+
+double ds;
+double dz;
+double U = -9999;
+double R = -9999;
+double n0;
+
+double rho_s = 1200;
+double rho_w = 1000;
+
+double Ca = 998; //713;
+double Cs = 1617; //1100;
+double Cv = 1850; //1850
+
+double theta = M_PI / 2; // PI / 2
+
+// param in func11
+double E, Cp, Cp0;
+
+// param in func12 - 15
+double M, Q, rho_c, rho_a, Ue, V;
+
+// param in func16
+int flag=0; //	0, gas-thrust;   1, buoyant;     2, umbrella
+			//  rho_a > rho_c    rho_a < rho_c   rho_a > rho_c
+
+// param in func17-19
+double n, Q0, Rg;
+
+
+double gz, gs;
+double ta, dp_over_dz;
+double smax;
+
 // Entrainment coefficient for plume calculation
 double ENTRAIN_COEFF_KS = 0.09;  // another k should be introduced for gas thurst region but uniform value in this code
 double ENTRAIN_COEFF_KW = 0.9;   // See Woodhouse et al. (2012) https://doi.org/10.1029/2012JB009592Digital Object Identifier (DOI)
+
 
 // MAP BOUNDARY
 double MAPENDE = -9999999;
@@ -488,6 +548,7 @@ void free_all(double *wind_alt, double *wind_v, double *wind_dir,
 
 
 
+// [0.]
 // =========================
 // Main program
 // simulation workflow:
@@ -720,7 +781,17 @@ int main(int argc, char *argv[]) {
 
 }	// End of main 
 
-/*
+/////////////////////////////////[PART 01]///////////////////////////////// 
+//
+//
+// ==============================
+// [1] Input
+// ==============================
+// [1.1] read_wind_file
+// [1.2] read_loc_file
+// [1.3] phiconvert
+// 
+/*[1.1.]
  * Read raw atmospheric (wind) data from the input file.
  *
  * This function only reads the original input profiles and stores them
@@ -771,7 +842,7 @@ void read_wind_file(
     fclose(in_wind);
 }
 
-/*
+/* [1.2.]
  * Read ground location data from the input file.
  *
  * This function only reads the original location coordinates.
@@ -808,6 +879,1088 @@ void read_loc_file(
 
     fclose(in_loc);
 }
+
+/* [1.3.]
+ *	The phi scale is inverted (smaller values mean larger particles),
+ *	so any incorrect ordering is automatically corrected by this function
+ */
+void phiconvert(){
+	if(MIN_GRAINSIZE < MAX_GRAINSIZE){
+		int tmp = MIN_GRAINSIZE;
+		MIN_GRAINSIZE = MAX_GRAINSIZE;
+		MAX_GRAINSIZE = tmp;
+	}
+}
+/////////////////////[END OF THE PART 01]/////////////////////
+
+/////////////////////////////////[PART 02]///////////////////////////////// 
+//
+//
+// ==============================
+// [2] Initialization
+// ==============================
+// [2.1] init_globals
+// [2.2] allocate_work_arrays
+// [2.3] initialize_simulation_state
+// 
+/* [2.1.]
+ * Initialize global parameters from configuration file.
+ *
+ * This function reads key-value pairs from the specified configuration file
+ * and assigns values to global variables used throughout the simulation.
+ *
+ * Supported parameters include:
+ * - physical constants (e.g., DIFFUSION_COEFFICIENT, EDDY_CONST)
+ * - eruption conditions (e.g., ERUPTION_MASS, MAGMA_DISCHARGE_RATE)
+ * - grain size distribution parameters (e.g., MAX_GRAINSIZE, STD_GRAINSIZE)
+ * - numerical settings (e.g., Z_DELTA, S_DELTA_FOR_FALL_CALC)
+ * - output control flags (e.g., WRITE_MASSLOADING, WRITE_COLUMN_FILES)
+ *
+ * Notes:
+ * - Lines starting with '#' or empty lines are ignored.
+ * - Values are parsed as either double or integer depending on parameter.
+ * - Pressure input is assumed to be in hPa where applicable.
+ * - If WRITE_CONF is enabled, all parsed values are printed to stderr.
+ *
+ * Return:
+ *   0 on success, non-zero if file cannot be opened.
+ */
+int init_globals(char *config_file) {
+
+  FILE *in_config;
+  char buf[1][30], **ptr1;
+  char line[MAX_LINE];
+  char space[4] = "\n\t ";
+  char *token;
+
+  in_config = fopen(config_file, "r");
+  	if (!config_file) {
+		fprintf(stderr, "Error: cannot open config file: %s\n", config_file);
+		perror("fopen");
+		exit(EXIT_FAILURE);
+	}
+
+  if (in_config == NULL) {
+    fprintf(stderr,
+	    "Cannot open configuration file=[%s]:[%s]. Exiting.\n", config_file, strerror(errno));
+    return 1;
+  }
+
+  ptr1 = (char **)&buf[0];
+  while (fgets(line, MAX_LINE, in_config) != NULL) {
+    /*fprintf(stderr, "%s\n", line); */
+    if (line[0] == '#' || line[0] == '\n') continue;
+
+    token = strtok_r(line, space, ptr1);
+    if (!strncmp(token, "DIFFUSION_COEFFICIENT", strlen("DIFFUSION_COEFFICIENT"))) {
+      token = strtok_r(NULL,space,ptr1);
+      DIFFUSION_COEFFICIENT = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "DIFFUSION_COEFFICIENT=%.1f\n", DIFFUSION_COEFFICIENT);
+	}
+	else if (!strncmp(token, "EDDY_CONST", strlen("EDDY_CONST"))) {
+      token = strtok_r(NULL,space,ptr1);
+      EDDY_CONST = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "EDDY_CONST=%g\n", EDDY_CONST);
+    }
+	else if (!strncmp(token, "ENTRAIN_COEFF_KS", strlen("ENTRAIN_COEFF_KS"))) {
+      token = strtok_r(NULL,space,ptr1);
+      ENTRAIN_COEFF_KS = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "ENTRAIN_COEFF_KS=%g\n", ENTRAIN_COEFF_KS);
+    }
+	else if (!strncmp(token, "ENTRAIN_COEFF_KW", strlen("ENTRAIN_COEFF_KW"))) {
+      token = strtok_r(NULL,space,ptr1);
+      ENTRAIN_COEFF_KW = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "ENTRAIN_COEFF_KW=%g\n", ENTRAIN_COEFF_KW);
+    }
+    else if (!strncmp(token, "FALL_TIME_THRESHOLD", strlen("FALL_TIME_THRESHOLD"))) {
+      token = strtok_r(NULL,space,ptr1);
+      FALL_TIME_THRESHOLD = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "FALL_TIME_THRESHOLD=%.1f\n", FALL_TIME_THRESHOLD);
+    }
+    /*else if (!strncmp(token, "LITHIC_DENSITY", strlen("LITHIC_DENSITY"))) {
+      token = strtok_r(NULL,space,ptr1);
+      LITHIC_DENSITY = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "LITHIC_DENSITY=%.1f\n", LITHIC_DENSITY);
+    }*/
+    else if (!strncmp(token, "PUMICE_DENSITY", strlen("PUMICE_DENSITY"))) {
+      token = strtok_r(NULL,space,ptr1);
+      PUMICE_DENSITY = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "PUMICE_DENSITY=%.1f\n", PUMICE_DENSITY);
+    }
+    else if (!strncmp(token, "Z_DELTA", strlen("Z_DELTA"))) {
+      token = strtok_r(NULL, space, ptr1);
+      Z_DELTA = (int)atoi(token);
+	  	if (Z_DELTA <= 0) {
+			fprintf(stderr, "Invalid Z_DELTA: %s\n", token);
+			exit(EXIT_FAILURE);
+		}
+      if(WRITE_CONF) fprintf(stderr, "Z_DELTA = %1.1f\n", Z_DELTA);
+    }
+    else if (!strncmp(token, "MINIMUM_CONTRIBUTION", strlen("MINIMUM_CONTRIBUTION"))) {
+      token = strtok_r(NULL, space, ptr1);
+      MINIMUM_CONTRIBUTION = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "MINIMUM_CONTRIBUTION = %g\n", MINIMUM_CONTRIBUTION);
+    }
+    else if (!strncmp(token, "S_DELTA_FOR_PLUME_CALC", strlen("S_DELTA_FOR_PLUME_CALC"))) {
+      token = strtok_r(NULL, space, ptr1);
+      S_DELTA_FOR_PLUME_CALC = (int)atoi(token);
+	  if (S_DELTA_FOR_PLUME_CALC <= 0) {
+			fprintf(stderr, "Invalid S_DELTA_FOR_PLUME_CALC: %s\n", token);
+			exit(EXIT_FAILURE);
+		}
+      if(WRITE_CONF) fprintf(stderr, "S_DELTA_FOR_PLUME_CALC = %1.1f\n", S_DELTA_FOR_PLUME_CALC);
+    }
+    else if (!strncmp(token, "S_DELTA_FOR_FALL_CALC", strlen("S_DELTA_FOR_FALL_CALC"))) {
+      token = strtok_r(NULL, space, ptr1);
+      S_DELTA_FOR_FALL_CALC = (int)atoi(token);
+		if (S_DELTA_FOR_FALL_CALC <= 0) {
+			fprintf(stderr, "Invalid S_DELTA_FOR_FALL_CALC: %s\n", token);
+			exit(EXIT_FAILURE);
+		}
+      if(WRITE_CONF) fprintf(stderr, "S_DELTA_FOR_FALL_CALC = %1.1f\n", S_DELTA_FOR_FALL_CALC);
+    }
+    else if (!strncmp(token, "ERUPTION_MASS", strlen("ERUPTION_MASS"))) {
+      token = strtok_r(NULL, space, ptr1);
+      ERUPTION_MASS = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "ERUPTION_MASS = %g\n", ERUPTION_MASS);
+    }
+    else if (!strncmp(token, "MAX_GRAINSIZE", strlen("MAX_GRAINSIZE"))) {
+      token = strtok_r(NULL, space, ptr1);
+      MAX_GRAINSIZE = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "MAX_GRAINSIZE = %.0f\n", MAX_GRAINSIZE);
+    }
+    else if (!strncmp(token, "MIN_GRAINSIZE", strlen("MIN_GRAINSIZE"))) {
+      token = strtok_r(NULL, space, ptr1);
+      MIN_GRAINSIZE = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "MIN_GRAINSIZE = %.0f\n", MIN_GRAINSIZE);
+    }
+    else if (!strncmp(token, "INTERVAL_DECIMAL_PHI", strlen("INTERVAL_DECIMAL_PHI"))) {
+      token = strtok_r(NULL, space, ptr1);
+      INTERVAL_DECIMAL_PHI = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "INTERVAL_DECIMAL_PHI = %.2f\n", INTERVAL_DECIMAL_PHI);
+    }
+    else if (!strncmp(token, "COLLAPSE_THEN_OFF", strlen("COLLAPSE_THEN_OFF"))) {
+      token = strtok_r(NULL, space, ptr1);
+      COLLAPSE_THEN_OFF = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "COLLAPSE_THEN_OFF = %d\n", COLLAPSE_THEN_OFF);
+    }
+    else if (!strncmp(token, "WRITE_DEPCENT_TRAJECTORY", strlen("WRITE_DEPCENT_TRAJECTORY"))) {
+      token = strtok_r(NULL, space, ptr1);
+      WRITE_DEPCENT_TRAJECTORY = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "WRITE_DEPCENT_TRAJECTORY = %d\n", WRITE_DEPCENT_TRAJECTORY);
+    }
+    else if (!strncmp(token, "WRITE_COLUMN_FILES", strlen("WRITE_COLUMN_FILES"))) {
+      token = strtok_r(NULL, space, ptr1);
+      WRITE_COLUMN_FILES = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "WRITE_COLUMN_FILES = %d\n", WRITE_COLUMN_FILES);
+    }
+    else if (!strncmp(token, "WRITE_DECIMAL_MASSLOADING", strlen("WRITE_COLUMN_FILES"))) {
+      token = strtok_r(NULL, space, ptr1);
+      WRITE_DECIMAL_MASSLOADING = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "WRITE_DECIMAL_MASSLOADING = %d\n", WRITE_DECIMAL_MASSLOADING);
+    }
+    else if (!strncmp(token, "WRITE_DECIMAL_FALL_TRAJ", strlen("WRITE_DECIMAL_FALL_TRAJ"))) {
+      token = strtok_r(NULL, space, ptr1);
+      WRITE_DECIMAL_FALL_TRAJ = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "WRITE_DECIMAL_FALL_TRAJ = %d\n", WRITE_DECIMAL_FALL_TRAJ);
+    }
+    else if (!strncmp(token, "WRITE_FALL_INFO_FILES", strlen("WRITE_FALL_INFO_FILES"))) {
+      token = strtok_r(NULL, space, ptr1);
+      WRITE_FALL_INFO_FILES = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "WRITE_FALL_INFO_FILES = %d\n", WRITE_FALL_INFO_FILES);
+    }
+    else if (!strncmp(token, "WRITE_CONF", strlen("WRITE_CONF"))) {
+      token = strtok_r(NULL, space, ptr1);
+      WRITE_CONF = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "WRITE_CONF = %d\n", WRITE_CONF);
+    }
+    else if (!strncmp(token, "WRITE_MASSLOADING", strlen("WRITE_MASSLOADING"))) {
+      token = strtok_r(NULL, space, ptr1);
+      WRITE_MASSLOADING = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "WRITE_MASSLOADING = %d\n", WRITE_MASSLOADING);
+    }
+    else if (!strncmp(token, "PRINT_PROGRESS", strlen("PRINT_PROGRESS"))) {
+      token = strtok_r(NULL, space, ptr1);
+      PRINT_PROGRESS = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "PRINT_PROGRESS = %d\n", PRINT_PROGRESS);
+    }
+    else if (!strncmp(token, "MEDIAN_GRAINSIZE", strlen("MEDIAN_GRAINSIZE"))) {
+      token = strtok_r(NULL, space, ptr1);
+      MEDIAN_GRAINSIZE = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "MEDIAN_GRAINSIZE = %.2f\n", MEDIAN_GRAINSIZE);
+    }
+    else if (!strncmp(token, "MINIMUM_DEPOSIT_FOR_MD_CALC", strlen("MINIMUM_DEPOSIT_FOR_MD_CALC"))) {
+      token = strtok_r(NULL, space, ptr1);
+      MINIMUM_DEPOSIT_FOR_MD_CALC = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "MINIMUM_DEPOSIT_FOR_MD_CALC = %.4f\n", MINIMUM_DEPOSIT_FOR_MD_CALC);
+    }
+    else if (!strncmp(token, "STD_GRAINSIZE", strlen("STD_GRAINSIZE"))) {
+      token = strtok_r(NULL, space, ptr1);
+      STD_GRAINSIZE = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "STD_GRAINSIZE = %.2f\n", STD_GRAINSIZE);
+    }
+    else if (!strncmp(token, "VENT_EASTING", strlen("VENT_EASTING"))) {
+      token = strtok_r(NULL, space, ptr1);
+      VENT_EASTING = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "VENT_EASTING = %.1f\n", VENT_EASTING);
+    }
+    else if (!strncmp(token, "VENT_NORTHING", strlen("VENT_NORTHING"))) {
+      token = strtok_r(NULL, space, ptr1);
+      VENT_NORTHING = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "VENT_NORTHING = %.1f\n", VENT_NORTHING);
+    }
+    else if (!strncmp(token, "VENT_ELEVATION", strlen("VENT_ELEVATION"))) {
+      token = strtok_r(NULL, space, ptr1);
+      VENT_ELEVATION = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "VENT_ELEVATION = %.1f\n", VENT_ELEVATION);
+    }
+    else if (!strncmp(token, "INITIAL_WATER_CONTENT", strlen("INITIAL_WATER_CONTENT"))) {
+      token = strtok_r(NULL, space, ptr1);
+      INITIAL_WATER_CONTENT = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "INITIAL_WATER_CONTENT = %.4f\n", INITIAL_WATER_CONTENT);
+    }
+    else if (!strncmp(token, "MAGMA_DISCHARGE_RATE", strlen("MAGMA_DISCHARGE_RATE"))) {
+      token = strtok_r(NULL, space, ptr1);
+      MAGMA_DISCHARGE_RATE = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "MAGMA_DISCHARGE_RATE = %.1f\n", MAGMA_DISCHARGE_RATE);
+    }
+    else if (!strncmp(token, "MAGMA_TEMPERATURE", strlen("MAGMA_TEMPERATURE"))) {
+      token = strtok_r(NULL, space, ptr1);
+      MAGMA_TEMPERATURE = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "MAGMA_TEMPERATURE = %.1f\n", MAGMA_TEMPERATURE);
+    }
+    else if (!strncmp(token, "MESH_SIZE_IN_KM", strlen("MESH_SIZE_IN_KM"))) {
+      token = strtok_r(NULL, space, ptr1);
+      MESH_SIZE_IN_KM = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "MESH_SIZE_IN_KM = %.2f\n", MESH_SIZE_IN_KM);
+    }
+    else if (!strncmp(token, "INITIAL_PLUME_VELOCITY", strlen("INITIAL_PLUME_VELOCITY"))) {
+      token = strtok_r(NULL, space, ptr1);
+      INITIAL_PLUME_VELOCITY = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "INITIAL_PLUME_VELOCITY = %.1f\n", INITIAL_PLUME_VELOCITY);
+    }
+    else if (!strncmp(token, "VENT_RADIUS", strlen("VENT_RADIUS"))) {
+      token = strtok_r(NULL, space, ptr1);
+      VENT_RADIUS = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "VENT_RADIUS = %.1f\n", VENT_RADIUS);
+    }
+    else if (!strncmp(token, "S_MAX", strlen("S_MAX"))) {
+      token = strtok_r(NULL, space, ptr1);
+      S_MAX = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "S_MAX = %.1f\n", S_MAX);
+    }
+    else if (!strncmp(token, "PLUME_THICKNESS", strlen("PLUME_THICKNESS"))) {        /* added by Kaz 09-Mar-2020 */
+      token = strtok_r(NULL, space, ptr1);
+      PLUME_THICKNESS = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "PLUME_THICKNESS = %.1f\n", PLUME_THICKNESS);
+    }
+    else if (!strncmp(token, "PLUME_RADIUS_CORRECTION", strlen("PLUME_RADIUS_CORRECTION"))) {        /* added by Kaz 09-Mar-2020 */
+      token = strtok_r(NULL, space, ptr1);
+      PLUME_RADIUS_CORRECTION = strtod(token, NULL);
+      if(WRITE_CONF) fprintf(stderr, "PLUME_RADIUS_CORRECTION = %.1f\n", PLUME_RADIUS_CORRECTION);
+    }
+    else continue;
+  }
+  (void) fclose(in_config);
+  return 0;
+}
+
+
+/* [2.2.]
+ * Allocate working arrays used in the main mass-loading calculation.
+ *
+ * These arrays store temporary fall/drift profiles, per-phi summaries,
+ * particle release distributions, cloud-center positions, cloud dispersion,
+ * and accumulated deposit information at ground locations.
+ *
+ * Main array dimensions:
+ * - ZDIM                                  : vertical grid
+ * - PHIDECDIM                             : decimal phi classes
+ * - SDIM_FOR_FALL_CALC                    : source points along plume axis
+ * - LOCDIM                                : ground locations
+ * - MIN_GRAINSIZE - MAX_GRAINSIZE         : integer phi classes
+ *
+ * Note:
+ * Arrays are allocated here only. Their physical meanings are documented
+ * at their declarations in main() and in the functions where they are used.
+ */
+void allocate_work_arrays(
+    double **ttlfalltime,
+    double **driftX,
+    double **driftY,
+    double **ttlfalltime_phiint,
+    double **ttldriftX_phiint,
+    double **ttldriftY_phiint,
+    double **ttlfalltime_phidec,
+    double **ttldriftX_phidec,
+    double **ttldriftY_phidec,
+    double **massreleased_per_ds_and_phidec,
+    SEG **massreleased_per_ds,
+    double **cloud_center_x,
+    double **cloud_center_y,
+    double **cloud_sigma2,
+    double **tmpmassloading,
+    double **ttlmassloading,
+    double **cummassphi,
+    DEP **location_properties,
+    RELEASE **r
+){
+	// temporary fall-time and drift profiles
+		// particle data, temporaly storage
+    *ttlfalltime = (double*)calloc(ZDIM, sizeof(double));
+    *driftX      = (double*)calloc(ZDIM, sizeof(double));
+    *driftY      = (double*)calloc(ZDIM, sizeof(double));
+		// particle data during fall for integer phi classes
+    *ttlfalltime_phiint = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
+    *ttldriftX_phiint   = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
+    *ttldriftY_phiint   = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
+		// particle data during fall for integer decunak phi classes
+    *ttlfalltime_phidec = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
+    *ttldriftX_phidec   = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
+    *ttldriftY_phidec   = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
+
+	// particle release distributions along plume axis
+    *massreleased_per_ds_and_phidec = (double*)calloc(SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
+    *massreleased_per_ds = (SEG*)calloc(SDIM_FOR_FALL_CALC, sizeof(SEG));
+
+	// cloud center positions and horizontal dispersion
+    *cloud_center_x = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
+    *cloud_center_y = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
+    *cloud_sigma2 = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
+
+	// mass loading and deposit accumulation at ground locations
+    *tmpmassloading = (double*)calloc(LOCDIM, sizeof(double));
+    *ttlmassloading = (double*)calloc(LOCDIM, sizeof(double));
+    *cummassphi     = (double*)calloc(LOCDIM, sizeof(double));
+
+	// output data structures
+    *location_properties = (DEP *)calloc(LOCDIM, sizeof(DEP));
+    *r = (RELEASE *)calloc(MIN_GRAINSIZE - MAX_GRAINSIZE, sizeof(RELEASE));
+}
+
+/* [2.3.]
+ * Initialize simulation state before main computation.
+ *
+ * This function:
+ * - assigns ground location coordinates to location_properties
+ * - resets mass loading and cumulative mass arrays
+ * - initializes theoretical released mass for each phi class
+ */
+void initialize_simulation_state(
+    DEP *location_properties,
+    double *locX,
+    double *locY,
+    double *locZ,
+    double *ttlmassloading,
+    double *cummassphi,
+    RELEASE *r
+){
+	/* location_properties is a structure storing final deposition results for each location (massloading.txt) */
+    set_coordinates_to_location_properties(location_properties, locX, locY, locZ);
+
+    clear_array(LOCDIM, ttlmassloading);
+    clear_array(LOCDIM, cummassphi);
+
+    compute_theoretical_particle_release(r);
+}
+/////////////////////[END OF THE PART 02]/////////////////////
+
+
+/////////////////////////////////[PART 03]///////////////////////////////// 
+//
+// ==============================
+// [3] Plume & Source Construction
+// ==============================
+// [3.1] build_plume_and_sources
+//   [3.1.1] plume_calculation
+//       [3.1.1.1] advance_plume_state_rk4
+//       [3.1.1.2] calc_plume_heat_capacity
+//       [3.1.1.3] calc_Cp0
+//       [3.1.1.4] func12
+//       [3.1.1.5] func13
+//       [3.1.1.6] func14
+//       [3.1.1.7] func15
+//       [3.1.1.8] func16
+//       [3.1.1.9] func17
+//       [3.1.1.10] func18
+//       [3.1.1.11] func19
+//   [3.1.2] set_source_points_on_plume
+//   [3.1.3] makewindstruct
+
+/* [3.1.]
+ * Compute plume trajectory and define particle source points along it.
+ *
+ * First, solve the plume trajectory using input atmospheric data and store
+ * the plume centerline coordinates, radius, and travel time.
+ * Then, place discrete particle source points along the plume axis for
+ * the fall and mass-loading calculations.
+ *
+ * Outputs:
+ * - plume_trajX/Y/Z : plume centerline coordinates [m]
+ * - plume_trajR     : plume radius [m]
+ * - plume_trajT     : elapsed time from vent along plume axis [s]
+ * - sourceX/Y/Z     : particle source coordinates [m]
+ * - sourceRadius    : plume radius at each source point [m]
+ * - sourceT         : elapsed time from vent to each source point [s]
+ */
+void build_plume_and_sources(
+    int windlinenum,
+    double *wind_alt,
+    double *wind_v,
+    double *wind_dir,
+    double *wind_tmp,
+    double *wind_pres,
+    double **plume_trajX,
+    double **plume_trajY,
+    double **plume_trajZ,
+    double **plume_trajR,
+    double **plume_trajT,
+    double **sourceX,
+    double **sourceY,
+    double **sourceZ,
+    double **sourceRadius,
+    double **sourceT
+){
+    // allocate arrays for plume trajectory
+    *plume_trajX = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajY = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajZ = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajR = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+    *plume_trajT = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
+
+	// compute plume centerline
+    Ht = plume_calculation(
+        windlinenum,
+        *plume_trajX, *plume_trajY, *plume_trajZ,
+        *plume_trajR, *plume_trajT,
+        wind_alt, wind_v, wind_dir, wind_tmp, wind_pres
+    );
+
+    // allocate arrays for particle source points
+    *sourceX = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceY = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceZ = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceRadius = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+    *sourceT = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
+
+	// interpolate source points along plume trajectory
+    set_source_points_on_plume(
+        *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT,
+        *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT
+    );
+}
+
+/* [3.1.1.]
+ * Compute plume trajectory and source-point properties.
+ *
+ * This is the main plume calculation routine.
+ * Starting from vent conditions, the plume state is advanced step by step
+ * along the plume axis using advance_plume_state_rk4().
+ *
+ * At each step:
+ * - plume state variables (Q, M, theta, E, etc.) are updated
+ * - atmospheric conditions are interpolated from input data
+ * - plume position and properties are stored as source points
+ *
+ * The integration continues until plume rise stops (theta <= 0 or M <= 0),
+ * and the plume top height Ht is determined.
+ *
+ * Outputs:
+ * - plume centerline trajectory
+ * - source-point positions and properties for particle calculations
+ * - plume height Ht
+ */
+double plume_calculation(int imax, double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *taftervent, double *wind_alt, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres){	// The main routine in this file
+	int i = 0;
+	int total = imax; // total line number of wind file
+
+	double Hg = -9999, Hb = -9999, Ht = -9999;
+	double U0, R0;
+
+	double z0;
+	double T;
+	double time_after_vent = 0.0;
+	double gz_previous, x_previous, g_dir_previous, north_previous;
+	double east_previous, ta_previous, p_previous, rho_a_previous, rho_c_previous, n_previous;
+	double Q_previous, Cp_previous, Rg_previous, V_previous, M_previous; //theta_previous;
+	double U_previous, R_previous, T_previous;
+
+	n0 = INITIAL_WATER_CONTENT;
+	z0 = VENT_ELEVATION;
+    ds = S_DELTA_FOR_PLUME_CALC;
+
+	gz= z0;
+	gs = 0;
+	FILE *f, *f2;
+
+	T = MAGMA_TEMPERATURE;
+
+	makewindstruct(imax, wind_alt, wind_v, wind_dir, wind_tmp, wind_pres);
+
+	if(WRITE_COLUMN_FILES) f = fopen("plume.txt", "w");
+
+	// initialize
+
+	ta = calc_Tatm(gz, total);
+	p = calc_Patm(gz, total);
+	Cp0 = calc_Cp0();
+
+	rho_a = compute_air_density(p, ta);
+	n=n0;
+
+	Rg=Rg0;
+	rho_c=func17(n0, p, Rg, T); // get rho_c
+
+	if(n0 < 0 || n0 > 1){
+      fprintf(stderr,
+  	      "ERROR\nYou need proper INITIAL_WATER_CONTENT in config file\nPROGRAM HAS BEEN HALTED\n\n");
+      exit(1);
+	}
+
+	if(MAGMA_DISCHARGE_RATE < 0 || INITIAL_PLUME_VELOCITY < 0 || VENT_RADIUS < 0){
+		if(MAGMA_DISCHARGE_RATE < 0 && INITIAL_PLUME_VELOCITY > 0 && VENT_RADIUS > 0){
+			Q = rho_c * INITIAL_PLUME_VELOCITY * VENT_RADIUS * VENT_RADIUS;
+			U = INITIAL_PLUME_VELOCITY;
+			R = VENT_RADIUS;
+		}else if(MAGMA_DISCHARGE_RATE > 0 && INITIAL_PLUME_VELOCITY < 0 && VENT_RADIUS > 0){
+			Q = MAGMA_DISCHARGE_RATE / M_PI;	// mass flux is defined as pi * Q in Woodhouse et al. (2012)
+			U = Q / (rho_c * VENT_RADIUS * VENT_RADIUS);
+			R = VENT_RADIUS;
+		}else if(MAGMA_DISCHARGE_RATE > 0 && INITIAL_PLUME_VELOCITY > 0 && VENT_RADIUS < 0){
+			Q = MAGMA_DISCHARGE_RATE / M_PI;	// mass flux is defined as pi * Q in Woodhouse et al. (2012)
+			U = INITIAL_PLUME_VELOCITY;
+			R = sqrt(Q / (rho_c * INITIAL_PLUME_VELOCITY));
+		}else{
+	        fprintf(stderr,
+	    	      "ERROR\nYou need to assign at least two parameters properly from U, R and Q in the config file\nPROGRAM HAS BEEN HALTED 179\n\n");
+	        exit(1);
+		}
+	}else{
+        fprintf(stderr,
+    	      "ERROR\nYou need to assign at least two parameters properly from U, R and Q in the config file\nPROGRAM HAS BEEN HALTED 184\n\n");
+        exit(1);
+	}
+
+
+	// initialize (func 11)
+	// Q = rho_c * U * R * R;
+	M = rho_c * U * U * R * R;
+	E = Q * Cp0 * T;
+
+	Q0 = Q;
+	U0 = U;
+	R0 = R;
+
+	Cp = Cp0;
+
+	V = interpolate_wind_speed(gz, total);		// wind velocity
+	g_dir = interpolate_wind_direction_across_360(gz, total);	// wind direction
+	x = 0.0;
+	north = 0.0;
+	east = 0.0;
+    //sourceX[i] = east; sourceY[i] = north; sourceZ[i] = gz, sourceR[i] = R, taftervent[i] = time_after_vent;
+
+  // Calculate plume parameters until reaching Hb: See while loop after Line 259
+  if(WRITE_COLUMN_FILES){
+  	fprintf(f, "#z\ts\tx\tdir\tnorthing\teasting\tTa\tP\tatm_dens\tcol_dens\tn\t");
+		fprintf(f, "Q\tCp\tRg\tV\tUe\tM\ttheta\t");
+		fprintf(f, "U\tR\tTm\tTime\n");
+  }
+
+	if(S_MAX < 0){smax = 99999;}else{smax = S_MAX;}
+
+	//while(i < 100000 && M > 0.0 && theta > 0.0 && gs <= smax){	// Till 2023.08.08
+	while(i < SDIM_FOR_PLUME_CALC && M > 0.0 && theta > 0.0 && gs <= smax){
+		//Ht = gz; // when M < 0 (static) or theta < 0 (windy), z just before the height is considered as Ht
+		// top of the gas thrust region
+		if(flag==0 && rho_a - rho_c > 0){flag=1; Hg = gz;}	// top of the gas-thrust region
+		// top of the convective region
+		if(flag==1 && rho_a - rho_c < 0){flag=2; Hb = gz;}	// top of the convective region
+		if(WRITE_COLUMN_FILES){
+			T = E / Q / Cp;
+			fprintf(f, "%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t", gz, gs, x, g_dir, north, east, ta, p, rho_a, rho_c, n);
+			fprintf(f, "%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t", Q, Cp, Rg, V, Ue, M, theta);
+			fprintf(f, "%1.4f\t%1.4f\t%1.4f\t%1.4f\n", U, R, T, time_after_vent);
+		}
+
+		gz_previous = gz; x_previous = x; g_dir_previous = g_dir; north_previous = north;
+		east_previous = east; ta_previous = ta; p_previous = p; rho_a_previous = rho_a; rho_c_previous = rho_c; n_previous = n;
+		Q_previous = Q; Cp_previous = Cp; Rg_previous = Rg; V_previous = V; M_previous = M; //theta_previous = theta;
+		U_previous = U; R_previous = R; T_previous = T;
+		
+		advance_plume_state_rk4(total, T);
+		time_after_vent += ds / ((U_previous + U) / 2);
+		taftervent[i] = time_after_vent;
+		
+		if(theta > 0.0){ //No i increment before here means i = 0 is not at crater but at next step after the crater
+			sourceX[i] = east; sourceY[i] = north; sourceZ[i] = gz, sourceR[i] = R;
+		}else{
+			gz = gz_previous; 
+			Ht = gz;
+
+			x = x_previous; g_dir = g_dir_previous; north = north_previous;
+			east = east_previous; ta = ta_previous; p = p_previous; rho_a = rho_a_previous; rho_c = rho_c_previous; n = n_previous;
+			Q = Q_previous; Cp = Cp_previous; Rg = Rg_previous; V = V_previous; Ue = 0; M = M_previous; theta = 0;
+			U = U_previous; R = R_previous; T = T_previous;
+			i--;
+			//sourceX[i] = east; sourceY[i] = north; sourceZ[i] = Ht, sourceR[i] = R;	
+		}
+		//time_after_vent += ds / ((U_previous + U) / 2);
+		//taftervent[i] = time_after_vent;
+		//printf("L1652i = %d\n", i);
+		i++;
+	}
+	
+	// Processing when plume reached Ht
+	if(WRITE_COLUMN_FILES) {
+		f2 = fopen("plume_parameters.txt", "w");
+		fprintf(f2, "#Q0\tU0\tR0\tHg\tHb\tHt\tR@Ht\tColumnT\tAtmT\n");
+		fprintf(f2, "%1.4e\t%1.4e\t%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\n", Q0 * M_PI, U0, R0, Hg, Hb, Ht, R, T, ta);
+		fclose(f2);
+	}
+
+	if(Hb == -9999 && COLLAPSE_THEN_OFF){
+		if(WRITE_COLUMN_FILES) fclose(f);
+		printf("Plume collapsed. No tephra dispersal calculated.\n");
+		exit(1);
+	}
+
+	PLUME_HEIGHT = Ht;
+    gs = gs - ds;
+
+	// Print out plume parameters after reaching Hb
+	V = interpolate_wind_speed(Ht, total);
+	while (i < SDIM_FOR_PLUME_CALC){
+		gs = gs + ds;
+		x += ds * cos(theta);
+		north = north + ds * cos(g_dir / 360 * 2 * M_PI);
+		east = east + ds * sin(g_dir / 360 * 2 * M_PI);
+		if(WRITE_COLUMN_FILES){
+			fprintf(f, "%1.4f\t%1.4f\t%1.4f\t%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t", Ht, gs, x, g_dir, north, east, ta, p, rho_a, rho_c, n);
+			fprintf(f, "%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t", Q, Cp, Rg, V, Ue, M, theta);
+			fprintf(f, "%1.4f\t%1.4f\t%1.4f\t%1.4f\n", V, R, T, time_after_vent);
+		}
+    	//printf("i = %d\n", i);
+		sourceX[i] = east; sourceY[i] = north; sourceZ[i] = Ht, sourceR[i] = R;
+		time_after_vent += ds / V;
+		taftervent[i] = time_after_vent;
+		i++;
+	}
+
+	if(WRITE_COLUMN_FILES) fclose(f);
+	//printf("kokodayo %1.4f\t%d\n", S_MAX, SDIM_FOR_FALL_CALC);
+	//read_plume_file(SDIM_FOR_FALL_CALC);
+
+	return(Ht);
+}
+
+
+/* [3.1.1.1]
+ * Advance plume state by one step using 4th-order Runge-Kutta (RK4).
+ *
+ * This function integrates the governing plume equations along the
+ * trajectory coordinate s, updating:
+ *   Q      : mass flux
+ *   M      : momentum flux
+ *   theta  : plume angle
+ *   E      : energy flux
+ *
+ * At each RK stage, atmospheric conditions (pressure, temperature,
+ * wind speed/direction) are interpolated based on height.
+ *
+ * The plume properties (density, velocity, radius, etc.) are updated
+ * consistently with the current state.
+ */
+void advance_plume_state_rk4(int total, double T){
+	//double dp_over_ds, dQ_over_ds, dM_over_ds, dtheta_over_ds, dE_over_ds;
+	//double dp_over_ds1, dQ_over_ds1, dM_over_ds1, dtheta_over_ds1, dE_over_ds1;
+	//double dp_over_ds2, dQ_over_ds2, dM_over_ds2, dtheta_over_ds2, dE_over_ds2;
+	//double dp_over_ds3, dQ_over_ds3, dM_over_ds3, dtheta_over_ds3, dE_over_ds3;
+
+	double dQ_over_ds, dM_over_ds, dtheta_over_ds, dE_over_ds;
+	double dQ_over_ds1, dM_over_ds1, dtheta_over_ds1, dE_over_ds1;
+	double dQ_over_ds2, dM_over_ds2, dtheta_over_ds2, dE_over_ds2;
+	double dQ_over_ds3, dM_over_ds3, dtheta_over_ds3, dE_over_ds3;
+	double dQ_over_ds4, dM_over_ds4, dtheta_over_ds4, dE_over_ds4;
+	double dx;
+
+	double E_tmp, M_tmp, rho_a_tmp, rho_c_tmp, p_tmp, theta_tmp, Q_tmp;
+
+	E_tmp = E; M_tmp = M; rho_a_tmp=rho_a; rho_c_tmp=rho_c; theta_tmp = theta; Q_tmp = Q;
+
+
+	/////////////////////////////////
+	// k1     ///////////////////////
+	//dp_over_ds1 = compute_pressure_gradient(p, ta);
+	dQ_over_ds1 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
+	dM_over_ds1 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
+	dtheta_over_ds1 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
+	dE_over_ds1 =     func15(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, ta, theta, dQ_over_ds1);
+
+	/////////////////////////////////////////////////
+	// generate next step parameters-----------------
+	Q_tmp = Q + dQ_over_ds1 * ds * 0.5;
+	M_tmp = M + dM_over_ds1 * ds * 0.5;
+	theta_tmp = theta + dtheta_over_ds1 * ds * 0.5;
+	E_tmp = E + dE_over_ds1 * ds * 0.5;
+
+	// centre position of the next step
+	dz = ds * sin(theta_tmp) * 0.5;
+
+
+	// atmosphreic content of the next step
+	n = func18(Q_tmp);				// calc n
+	p_tmp = calc_Patm(gz+ dz, total);
+	ta = calc_Tatm(gz+ dz, total);
+	rho_a_tmp = compute_air_density(p_tmp, ta);
+
+	Cp = calc_plume_heat_capacity(n);					// calc Cp
+	//printf("k1\n");
+	V  = interpolate_wind_speed(gz+ dz, total);
+
+	T = E_tmp / Q_tmp / Cp;
+
+	Rg = func19(n);					// calc Rg
+	rho_c_tmp = func17(n, p_tmp, Rg, T);	// calc plume density (rho_c)
+
+	Ue = func16(M_tmp, Q_tmp, theta_tmp, V);
+	U = M_tmp / Q_tmp;
+	R = sqrt(Q_tmp / (U * rho_c));
+
+	/////////////////////////////////
+	// k2     ///////////////////////
+	//dp_over_ds2 = compute_pressure_gradient(p_tmp, ta);
+	dQ_over_ds2 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
+	dM_over_ds2 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
+	dtheta_over_ds2 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
+	dE_over_ds2 =     func15(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, ta, theta, dQ_over_ds1);
+
+	/////////////////////////////////////////////////
+	// generate next step parameters-----------------
+	Q_tmp = Q + dQ_over_ds2 * ds * 0.5;
+	M_tmp = M + dM_over_ds2 * ds * 0.5;
+	theta_tmp = theta + dtheta_over_ds2 * ds * 0.5;
+	E_tmp = E + dE_over_ds2 * ds * 0.5;
+
+	// centre position of the next step
+	dz = ds * 0.5 * sin(theta_tmp);
+
+
+	// atmosphreic content of the next step
+	n = func18(Q_tmp);				// calc n
+	p_tmp = calc_Patm(gz+ dz, total);
+	ta = calc_Tatm(gz+ dz, total);
+	rho_a_tmp = compute_air_density(p_tmp, ta);
+
+	Cp = calc_plume_heat_capacity(n);					// calc Cp
+	//printf("k2\n");
+	V = interpolate_wind_speed(gz+ dz, total);
+
+	T = E_tmp / Q_tmp / Cp;
+
+	Rg = func19(n);					// calc Rg
+	rho_c_tmp = func17(n, p_tmp, Rg, T);	// calc plume density (rho_c)
+
+	Ue = func16(M_tmp, Q_tmp, theta_tmp, V);
+	U = M_tmp / Q_tmp;
+	R = sqrt(Q_tmp / (U * rho_c));
+
+	/////////////////////////////////
+	// k3     ///////////////////////
+	//dp_over_ds3 = compute_pressure_gradient(p_tmp, ta);
+	dQ_over_ds3 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
+	dM_over_ds3 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
+	dtheta_over_ds3 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
+	dE_over_ds3 =     func15(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, ta, theta, dQ_over_ds2);
+
+	/////////////////////////////////////////////////
+	// generate next step parameters-----------------
+	Q_tmp = Q + dQ_over_ds3 * ds;
+	M_tmp = M + dM_over_ds3 * ds;
+	theta_tmp = theta + dtheta_over_ds3 * ds;
+	E_tmp = E + dE_over_ds3 * ds;
+
+	// centre position of the next step
+	dz = ds * sin(theta_tmp);
+
+
+	// atmosphreic content of the next step
+	n = func18(Q_tmp);				// calc n
+	p_tmp = calc_Patm(gz+ dz, total);
+	ta = calc_Tatm(gz+ dz, total);
+	rho_a_tmp = compute_air_density(p_tmp, ta);
+
+	Cp = calc_plume_heat_capacity(n);					// calc Cp
+	//printf("k3\n");
+	V = interpolate_wind_speed(gz+ dz, total);
+
+	T = E_tmp / Q_tmp / Cp;
+
+	Rg = func19(n);					// calc Rg
+	rho_c_tmp = func17(n, p_tmp, Rg, T);	// calc plume density (rho_c)
+
+	Ue = func16(M_tmp, Q_tmp, theta_tmp, V);
+	U = M_tmp / Q_tmp;
+	R = sqrt(Q_tmp / (U * rho_c));
+
+	/////////////////////////////////
+	// k4     ///////////////////////
+	//dp_over_ds4 = compute_pressure_gradient(p_tmp, ta);
+	dQ_over_ds4 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
+	dM_over_ds4 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
+	dtheta_over_ds4 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
+	dE_over_ds4 =     func15(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, ta, theta, dQ_over_ds3);
+
+	////////////////////////////////////
+	////////////////////////////////////
+	//// set new step value   //////////
+
+	//dp_over_ds = 	 (dp_over_ds1 + 2 * dp_over_ds2 + 2 * dp_over_ds3 + dp_over_ds4)/6;
+	dQ_over_ds = 	 (dQ_over_ds1 + 2 * dQ_over_ds2 + 2 * dQ_over_ds3 + dQ_over_ds4)/6;
+	dM_over_ds = 	 (dM_over_ds1 + 2 * dM_over_ds2 + 2 * dM_over_ds3 + dM_over_ds4)/6;
+	dtheta_over_ds = (dtheta_over_ds1 + 2 * dtheta_over_ds2 + 2 * dtheta_over_ds3 + dtheta_over_ds4)/6;
+	dE_over_ds =     (dE_over_ds1 + 2 * dE_over_ds2 + 2 * dE_over_ds3 + dE_over_ds4)/6;
+
+
+	//printf("U = %1.1f\tdQ_over_ds=%1.4f\tdM_over_ds=%1.4f\n", U, dQ_over_ds, dM_over_ds);
+
+	// generate next step parameters
+	Q = Q + dQ_over_ds * ds;
+	M = M + dM_over_ds * ds;
+	if(M<0){M=0;}
+	theta = theta + dtheta_over_ds * ds;
+	E = E + dE_over_ds * ds;
+
+	// centre position of the next step
+	dx = ds * cos(theta);
+	dz = ds * sin(theta);
+	north = north + dx * cos(g_dir / 360 * 2 * M_PI);
+	east = east + dx * sin(g_dir / 360 * 2 * M_PI);
+	x = x + dx;
+	gs= gs+ ds;
+	gz= gz+ dz;
+
+	// atmosphreic content of the next step
+	n = func18(Q);				// calc n
+	p = calc_Patm(gz, total);
+	ta = calc_Tatm(gz, total);
+	rho_a = compute_air_density(p, ta);
+
+	Cp = calc_plume_heat_capacity(n);					// calc Cp
+	//printf("k4\n");
+	V = interpolate_wind_speed(gz, total);
+	g_dir = interpolate_wind_direction_across_360(gz, total);
+
+
+
+	T = E / Q / Cp;
+
+	Rg = func19(n);					// calc Rg
+	rho_c = func17(n, p, Rg, T);	// calc plume density (rho_c)
+
+	Ue = func16(M, Q, theta_tmp, V);
+	U = M / Q;
+	R = sqrt(Q / (U * rho_c));
+}
+
+/* [3.1.1.2.]
+ * Compute mixture heat capacity Cp for a given gas fraction n.
+ * (Equation 20 in Woodhouse et al.)
+ *
+ * Cp is linearly interpolated between:
+ * - Ca : heat capacity of air
+ * - Cp0: initial mixture heat capacity
+ *
+ * using gas fraction n:
+ *
+ *   Cp = Ca + (Cp0 - Ca) * (1 - n) / (1 - n0)
+ */
+double calc_plume_heat_capacity(double n_tmp){
+	double Cp_tmp;
+	Cp_tmp = Ca + (Cp0 - Ca) * (1 - n_tmp) / (1 - n0);
+
+	return Cp_tmp;
+}
+
+/* [3.1.1.3.]
+ * Compute mixture initial specific heat capacity of plume (Cp0).
+ *
+ * n0 = initial gas fraction
+ * Cv = specific heat capacity of water vapor
+ * Cs = specific heat capacity of solid pyroclast
+ */
+double calc_Cp0(){
+	return n0 * Cv + (1 - n0) * Cs;
+}
+
+
+/* */
+/* Function numbers correspond that in Woodhouse et al (2012) */
+/* [3.1.1.4] */
+/*  Flux change along the plume axis*/
+double func12(double M_tmp, double rho_a_tmp, double rho_c_tmp, double Q_tmp){			// plume mass flux
+	double dQ_over_ds;
+
+	dQ_over_ds = 2 * rho_a_tmp * Ue * Q_tmp / sqrt(rho_c_tmp * M_tmp);
+
+	//printf("%1.4f\n", dQ_over_ds);
+	return dQ_over_ds;
+}
+
+/* [3.1.1.5] */
+/*  Momentum flux variation along the plume axis　*/
+double func13(double rho_a_tmp, double rho_c_tmp, double M_tmp, double theta_tmp, double Q_tmp){
+	double dM_over_ds;
+
+	dM_over_ds = GRAVITY * (rho_a_tmp - rho_c) * Q_tmp * Q_tmp / (rho_c_tmp * M_tmp) * sin(theta_tmp);
+	dM_over_ds = dM_over_ds + 2 * rho_a_tmp * Q_tmp / sqrt(rho_c_tmp * M_tmp) * Ue * V * cos(theta_tmp);
+
+	return dM_over_ds;
+}
+
+/* [3.1.1.6] */
+/*  Plume axis angle variation along the plume axis　*/
+double func14(double M_tmp, double Q_tmp, double rho_a_tmp, double rho_c_tmp, double theta_tmp){
+	double dtheta_over_ds;
+
+	dtheta_over_ds = GRAVITY * (rho_a_tmp - rho_c_tmp) * Q_tmp * Q_tmp * cos(theta_tmp) / (rho_c_tmp * M_tmp * M_tmp);
+	dtheta_over_ds = dtheta_over_ds - 2 * rho_a_tmp * Q_tmp * Ue * V * sin(theta_tmp) / (M * sqrt(rho_c_tmp * M_tmp));
+
+	//printf("dtheta = %1.4f\n", dtheta_over_ds);
+	return dtheta_over_ds;
+}
+
+/* [3.1.1.7] */
+/*  Enthalpy flux variation along the plume axis　*/
+double func15(double M_tmp, double Q_tmp, double rho_a_tmp, double rho_c_tmp, double Ta, double theta_tmp, double dQ_over_ds){
+	double dE_over_ds;
+	double term1, term2, term3, term4;
+
+	term1 = (Ca * Ta + Ue * Ue / 2) * dQ_over_ds;
+	term2 = M_tmp * M_tmp / (2 * Q_tmp * Q_tmp) * dQ_over_ds;
+	term3 = rho_a_tmp / rho_c_tmp * Q_tmp * GRAVITY * sin(theta_tmp);
+	term4 = 2 * rho_a_tmp * Ue * V * cos(theta_tmp) * sqrt(M_tmp / rho_c_tmp);
+	dE_over_ds = term1 + term2 - term3 - term4;
+
+	return dE_over_ds;
+}
+
+/* [3.1.1.8] */
+/*  Entrainment velocity along the plume boundary　*/
+double func16(double M_tmp, double Q_tmp, double theta_tmp, double V_tmp){
+	double ue_tmp;
+	double ks_tmp;
+
+	//if(flag==0){ks_tmp=sqrt(rho_a/rho_c)/16;}
+	//else{ks_tmp=ks;}	// use these lines when you use ks for gas thrust region; include rho_a and rho_c as local
+
+	ks_tmp=ENTRAIN_COEFF_KS;	// gas thrust region also assumes 0.09
+				// remove this line when you take
+				// ks = f(rho_a. rho_c)
+
+	//printf("flag=%d\tks=%1.4f\n", flag, ks_tmp);
+
+	ue_tmp = ks_tmp * fabs(M_tmp/Q_tmp - V_tmp * cos(theta_tmp)) + ENTRAIN_COEFF_KW * fabs(V_tmp * sin(theta_tmp));
+
+	return ue_tmp;
+}
+
+/* [3.1.1.9] */
+/*  Bulk plume density　*/
+double func17(double n_tmp, double p_tmp, double Rg_tmp, double T_tmp){			// plume density
+	double rho_tmp;
+
+	rho_tmp = (1 - n_tmp) / rho_s + n_tmp * Rg_tmp * T_tmp / p_tmp;
+	rho_c = 1 / rho_tmp;
+	//printf("rho     = %1.4f\n", rho);
+	return rho_c;
+}
+
+/* [3.1.1.10] */
+/*  Gas fraction of plume　*/
+double func18(double Q_tmp){			// solid content in the plume
+	double n_tmp;
+	n_tmp = 1 - (1 - n0) * Q0 / Q_tmp;
+
+	return n_tmp;
+}
+
+/* [3.1.1.11] */
+/*  Bulc gas constant　*/
+double func19(double n_tmp){
+	double Rg_tmp;
+	Rg_tmp = Ra + (Rg0 - Ra) * n0 * (1 - n_tmp) / (n_tmp * (1 - n0));
+
+	return Rg_tmp;
+}
+
+/* End of Woodhouse functions*/
+
+
+/* [3.1.2.]
+ * Define particle source points along the plume trajectory.
+ *
+ * Source points are placed at regular intervals along plume-axis distance
+ * using S_DELTA_FOR_FALL_CALC. Their position, radius, and travel time are
+ * obtained by linear interpolation from the plume trajectory calculated at
+ * intervals of S_DELTA_FOR_PLUME_CALC.
+ *
+ * Outputs:
+ * - sourceX/Y/Z : coordinates of particle source points [m]
+ * - sourceR     : plume radius at each source point [m]
+ * - sourceT     : elapsed time from vent to each source point [s]
+ */
+void set_source_points_on_plume(double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *sourceT, double *plume_trajX, double *plume_trajY, double *plume_trajZ, double *plume_trajR, double *plume_trajT){
+	double r = 0.0;
+	for(int j = 0; j < SDIM_FOR_FALL_CALC; j++){
+		for(int i = 0; i < SDIM_FOR_PLUME_CALC + 1; i++){
+			if((double)(j + 1) * S_DELTA_FOR_FALL_CALC == (double)i * S_DELTA_FOR_PLUME_CALC){
+				sourceX[j] = plume_trajX[i-1]; sourceY[j] = plume_trajY[i-1]; sourceZ[j] = plume_trajZ[i-1]; sourceR[j] = plume_trajR[i-1]; sourceT[j] = plume_trajT[i-1];
+				//printf("LINE481 i=%d\tj=%d\tr=0.0\n", i, j);
+				break;
+			}else if((double)(j + 1) * S_DELTA_FOR_FALL_CALC < (double)i * S_DELTA_FOR_PLUME_CALC && (double)(j + 1) * S_DELTA_FOR_FALL_CALC > (double)(i - 1) * S_DELTA_FOR_PLUME_CALC){
+				r = (double)(j + 1) * S_DELTA_FOR_FALL_CALC - (double)(i - 1) * S_DELTA_FOR_PLUME_CALC;
+				r = r / ((double)i * S_DELTA_FOR_PLUME_CALC - (double)(i - 1) * S_DELTA_FOR_PLUME_CALC);
+				i--;
+				sourceX[j] = plume_trajX[i - 1] + r * (plume_trajX[i] - plume_trajX[i - 1]);
+				sourceY[j] = plume_trajY[i - 1] + r * (plume_trajY[i] - plume_trajY[i - 1]);
+				sourceZ[j] = plume_trajZ[i - 1] + r * (plume_trajZ[i] - plume_trajZ[i - 1]);
+				sourceR[j] = plume_trajR[i - 1] + r * (plume_trajR[i] - plume_trajR[i - 1]);
+				sourceT[j] = plume_trajT[i - 1] + r * (plume_trajT[i] - plume_trajT[i - 1]);
+				i++;
+				//printf("LINE491 i=%d\tj=%d\tr=%1.4f\n", i, j, r);
+				break;
+			}
+		}
+	}
+}
+
+/* [3.1.3.]
+ * Build WIND structure array from input atmospheric data arrays.
+ *
+ * This function converts separate arrays (altitude, wind speed,
+ * direction, temperature, pressure) into an array of WIND structures.
+ */
+void makewindstruct(int imax, double *alt, double *v, double *dir, double *temp, double *pres){
+	W1 = (WIND *)malloc((imax) * sizeof(WIND));
+
+	for(int i = 0; i < imax; i++){
+    W1[i].day=0;
+    W1[i].hour=0;
+    W1[i].wind_height=alt[i];
+    W1[i].wind_speed=v[i];
+    W1[i].wind_dir=dir[i];
+		W1[i].t_atm=temp[i];
+		W1[i].p_atm=pres[i];
+	}
+
+	/*for(int i = 0; i < imax; i++){
+		printf("%d\t%1.4f\t%1.4f\n", i, W1[i].wind_dir, W1[i].wind_speed);
+	}*/
+}
+
+/////////////////////[END OF THE PART 03]/////////////////////
+
 
 /*
  * Write plume trajectory and particle source positions to files.
@@ -927,105 +2080,6 @@ void build_atmosphere_tables(
 }
 
 
-
-
-/*
- * Allocate working arrays used in the main mass-loading calculation.
- *
- * These arrays store temporary fall/drift profiles, per-phi summaries,
- * particle release distributions, cloud-center positions, cloud dispersion,
- * and accumulated deposit information at ground locations.
- *
- * Main array dimensions:
- * - ZDIM                                  : vertical grid
- * - PHIDECDIM                             : decimal phi classes
- * - SDIM_FOR_FALL_CALC                    : source points along plume axis
- * - LOCDIM                                : ground locations
- * - MIN_GRAINSIZE - MAX_GRAINSIZE         : integer phi classes
- *
- * Note:
- * Arrays are allocated here only. Their physical meanings are documented
- * at their declarations in main() and in the functions where they are used.
- */
-void allocate_work_arrays(
-    double **ttlfalltime,
-    double **driftX,
-    double **driftY,
-    double **ttlfalltime_phiint,
-    double **ttldriftX_phiint,
-    double **ttldriftY_phiint,
-    double **ttlfalltime_phidec,
-    double **ttldriftX_phidec,
-    double **ttldriftY_phidec,
-    double **massreleased_per_ds_and_phidec,
-    SEG **massreleased_per_ds,
-    double **cloud_center_x,
-    double **cloud_center_y,
-    double **cloud_sigma2,
-    double **tmpmassloading,
-    double **ttlmassloading,
-    double **cummassphi,
-    DEP **location_properties,
-    RELEASE **r
-){
-	// temporary fall-time and drift profiles
-		// particle data, temporaly storage
-    *ttlfalltime = (double*)calloc(ZDIM, sizeof(double));
-    *driftX      = (double*)calloc(ZDIM, sizeof(double));
-    *driftY      = (double*)calloc(ZDIM, sizeof(double));
-		// particle data during fall for integer phi classes
-    *ttlfalltime_phiint = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
-    *ttldriftX_phiint   = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
-    *ttldriftY_phiint   = (double*)calloc(ZDIM * (MIN_GRAINSIZE - MAX_GRAINSIZE), sizeof(double));
-		// particle data during fall for integer decunak phi classes
-    *ttlfalltime_phidec = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
-    *ttldriftX_phidec   = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
-    *ttldriftY_phidec   = (double*)calloc(ZDIM * PHIDECDIM, sizeof(double));
-
-	// particle release distributions along plume axis
-    *massreleased_per_ds_and_phidec = (double*)calloc(SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
-    *massreleased_per_ds = (SEG*)calloc(SDIM_FOR_FALL_CALC, sizeof(SEG));
-
-	// cloud center positions and horizontal dispersion
-    *cloud_center_x = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
-    *cloud_center_y = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
-    *cloud_sigma2 = (double*)calloc(ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM, sizeof(double));
-
-	// mass loading and deposit accumulation at ground locations
-    *tmpmassloading = (double*)calloc(LOCDIM, sizeof(double));
-    *ttlmassloading = (double*)calloc(LOCDIM, sizeof(double));
-    *cummassphi     = (double*)calloc(LOCDIM, sizeof(double));
-
-	// output data structures
-    *location_properties = (DEP *)calloc(LOCDIM, sizeof(DEP));
-    *r = (RELEASE *)calloc(MIN_GRAINSIZE - MAX_GRAINSIZE, sizeof(RELEASE));
-}
-
-/*
- * Initialize simulation state before main computation.
- *
- * This function:
- * - assigns ground location coordinates to location_properties
- * - resets mass loading and cumulative mass arrays
- * - initializes theoretical released mass for each phi class
- */
-void initialize_simulation_state(
-    DEP *location_properties,
-    double *locX,
-    double *locY,
-    double *locZ,
-    double *ttlmassloading,
-    double *cummassphi,
-    RELEASE *r
-){
-	/* location_properties is a structure storing final deposition results for each location (massloading.txt) */
-    set_coordinates_to_location_properties(location_properties, locX, locY, locZ);
-
-    clear_array(LOCDIM, ttlmassloading);
-    clear_array(LOCDIM, cummassphi);
-
-    compute_theoretical_particle_release(r);
-}
 
 
 /*
@@ -1333,43 +2387,6 @@ void free_all(
     free(r);
 }
 
-/*
- * Define particle source points along the plume trajectory.
- *
- * Source points are placed at regular intervals along plume-axis distance
- * using S_DELTA_FOR_FALL_CALC. Their position, radius, and travel time are
- * obtained by linear interpolation from the plume trajectory calculated at
- * intervals of S_DELTA_FOR_PLUME_CALC.
- *
- * Outputs:
- * - sourceX/Y/Z : coordinates of particle source points [m]
- * - sourceR     : plume radius at each source point [m]
- * - sourceT     : elapsed time from vent to each source point [s]
- */
-void set_source_points_on_plume(double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *sourceT, double *plume_trajX, double *plume_trajY, double *plume_trajZ, double *plume_trajR, double *plume_trajT){
-	double r = 0.0;
-	for(int j = 0; j < SDIM_FOR_FALL_CALC; j++){
-		for(int i = 0; i < SDIM_FOR_PLUME_CALC + 1; i++){
-			if((double)(j + 1) * S_DELTA_FOR_FALL_CALC == (double)i * S_DELTA_FOR_PLUME_CALC){
-				sourceX[j] = plume_trajX[i-1]; sourceY[j] = plume_trajY[i-1]; sourceZ[j] = plume_trajZ[i-1]; sourceR[j] = plume_trajR[i-1]; sourceT[j] = plume_trajT[i-1];
-				//printf("LINE481 i=%d\tj=%d\tr=0.0\n", i, j);
-				break;
-			}else if((double)(j + 1) * S_DELTA_FOR_FALL_CALC < (double)i * S_DELTA_FOR_PLUME_CALC && (double)(j + 1) * S_DELTA_FOR_FALL_CALC > (double)(i - 1) * S_DELTA_FOR_PLUME_CALC){
-				r = (double)(j + 1) * S_DELTA_FOR_FALL_CALC - (double)(i - 1) * S_DELTA_FOR_PLUME_CALC;
-				r = r / ((double)i * S_DELTA_FOR_PLUME_CALC - (double)(i - 1) * S_DELTA_FOR_PLUME_CALC);
-				i--;
-				sourceX[j] = plume_trajX[i - 1] + r * (plume_trajX[i] - plume_trajX[i - 1]);
-				sourceY[j] = plume_trajY[i - 1] + r * (plume_trajY[i] - plume_trajY[i - 1]);
-				sourceZ[j] = plume_trajZ[i - 1] + r * (plume_trajZ[i] - plume_trajZ[i - 1]);
-				sourceR[j] = plume_trajR[i - 1] + r * (plume_trajR[i] - plume_trajR[i - 1]);
-				sourceT[j] = plume_trajT[i - 1] + r * (plume_trajT[i] - plume_trajT[i - 1]);
-				i++;
-				//printf("LINE491 i=%d\tj=%d\tr=%1.4f\n", i, j, r);
-				break;
-			}
-		}
-	}
-}
 
 /*
  * Store 1D vertical profile into a 2D array indexed by (phi, z).
@@ -2770,268 +3787,6 @@ double calc_cloud_sigma2(double source_radius, double falltime) {
 } // End of the function
 
 
-/*
- * Initialize global parameters from configuration file.
- *
- * This function reads key-value pairs from the specified configuration file
- * and assigns values to global variables used throughout the simulation.
- *
- * Supported parameters include:
- * - physical constants (e.g., DIFFUSION_COEFFICIENT, EDDY_CONST)
- * - eruption conditions (e.g., ERUPTION_MASS, MAGMA_DISCHARGE_RATE)
- * - grain size distribution parameters (e.g., MAX_GRAINSIZE, STD_GRAINSIZE)
- * - numerical settings (e.g., Z_DELTA, S_DELTA_FOR_FALL_CALC)
- * - output control flags (e.g., WRITE_MASSLOADING, WRITE_COLUMN_FILES)
- *
- * Notes:
- * - Lines starting with '#' or empty lines are ignored.
- * - Values are parsed as either double or integer depending on parameter.
- * - Pressure input is assumed to be in hPa where applicable.
- * - If WRITE_CONF is enabled, all parsed values are printed to stderr.
- *
- * Return:
- *   0 on success, non-zero if file cannot be opened.
- */
-int init_globals(char *config_file) {
-
-  FILE *in_config;
-  char buf[1][30], **ptr1;
-  char line[MAX_LINE];
-  char space[4] = "\n\t ";
-  char *token;
-
-  in_config = fopen(config_file, "r");
-  	if (!config_file) {
-		fprintf(stderr, "Error: cannot open config file: %s\n", config_file);
-		perror("fopen");
-		exit(EXIT_FAILURE);
-	}
-
-  if (in_config == NULL) {
-    fprintf(stderr,
-	    "Cannot open configuration file=[%s]:[%s]. Exiting.\n", config_file, strerror(errno));
-    return 1;
-  }
-
-  ptr1 = (char **)&buf[0];
-  while (fgets(line, MAX_LINE, in_config) != NULL) {
-    /*fprintf(stderr, "%s\n", line); */
-    if (line[0] == '#' || line[0] == '\n') continue;
-
-    token = strtok_r(line, space, ptr1);
-    if (!strncmp(token, "DIFFUSION_COEFFICIENT", strlen("DIFFUSION_COEFFICIENT"))) {
-      token = strtok_r(NULL,space,ptr1);
-      DIFFUSION_COEFFICIENT = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "DIFFUSION_COEFFICIENT=%.1f\n", DIFFUSION_COEFFICIENT);
-	}
-	else if (!strncmp(token, "EDDY_CONST", strlen("EDDY_CONST"))) {
-      token = strtok_r(NULL,space,ptr1);
-      EDDY_CONST = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "EDDY_CONST=%g\n", EDDY_CONST);
-    }
-	else if (!strncmp(token, "ENTRAIN_COEFF_KS", strlen("ENTRAIN_COEFF_KS"))) {
-      token = strtok_r(NULL,space,ptr1);
-      ENTRAIN_COEFF_KS = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "ENTRAIN_COEFF_KS=%g\n", ENTRAIN_COEFF_KS);
-    }
-	else if (!strncmp(token, "ENTRAIN_COEFF_KW", strlen("ENTRAIN_COEFF_KW"))) {
-      token = strtok_r(NULL,space,ptr1);
-      ENTRAIN_COEFF_KW = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "ENTRAIN_COEFF_KW=%g\n", ENTRAIN_COEFF_KW);
-    }
-    else if (!strncmp(token, "FALL_TIME_THRESHOLD", strlen("FALL_TIME_THRESHOLD"))) {
-      token = strtok_r(NULL,space,ptr1);
-      FALL_TIME_THRESHOLD = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "FALL_TIME_THRESHOLD=%.1f\n", FALL_TIME_THRESHOLD);
-    }
-    /*else if (!strncmp(token, "LITHIC_DENSITY", strlen("LITHIC_DENSITY"))) {
-      token = strtok_r(NULL,space,ptr1);
-      LITHIC_DENSITY = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "LITHIC_DENSITY=%.1f\n", LITHIC_DENSITY);
-    }*/
-    else if (!strncmp(token, "PUMICE_DENSITY", strlen("PUMICE_DENSITY"))) {
-      token = strtok_r(NULL,space,ptr1);
-      PUMICE_DENSITY = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "PUMICE_DENSITY=%.1f\n", PUMICE_DENSITY);
-    }
-    else if (!strncmp(token, "Z_DELTA", strlen("Z_DELTA"))) {
-      token = strtok_r(NULL, space, ptr1);
-      Z_DELTA = (int)atoi(token);
-	  	if (Z_DELTA <= 0) {
-			fprintf(stderr, "Invalid Z_DELTA: %s\n", token);
-			exit(EXIT_FAILURE);
-		}
-      if(WRITE_CONF) fprintf(stderr, "Z_DELTA = %1.1f\n", Z_DELTA);
-    }
-    else if (!strncmp(token, "MINIMUM_CONTRIBUTION", strlen("MINIMUM_CONTRIBUTION"))) {
-      token = strtok_r(NULL, space, ptr1);
-      MINIMUM_CONTRIBUTION = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "MINIMUM_CONTRIBUTION = %g\n", MINIMUM_CONTRIBUTION);
-    }
-    else if (!strncmp(token, "S_DELTA_FOR_PLUME_CALC", strlen("S_DELTA_FOR_PLUME_CALC"))) {
-      token = strtok_r(NULL, space, ptr1);
-      S_DELTA_FOR_PLUME_CALC = (int)atoi(token);
-	  if (S_DELTA_FOR_PLUME_CALC <= 0) {
-			fprintf(stderr, "Invalid S_DELTA_FOR_PLUME_CALC: %s\n", token);
-			exit(EXIT_FAILURE);
-		}
-      if(WRITE_CONF) fprintf(stderr, "S_DELTA_FOR_PLUME_CALC = %1.1f\n", S_DELTA_FOR_PLUME_CALC);
-    }
-    else if (!strncmp(token, "S_DELTA_FOR_FALL_CALC", strlen("S_DELTA_FOR_FALL_CALC"))) {
-      token = strtok_r(NULL, space, ptr1);
-      S_DELTA_FOR_FALL_CALC = (int)atoi(token);
-		if (S_DELTA_FOR_FALL_CALC <= 0) {
-			fprintf(stderr, "Invalid S_DELTA_FOR_FALL_CALC: %s\n", token);
-			exit(EXIT_FAILURE);
-		}
-      if(WRITE_CONF) fprintf(stderr, "S_DELTA_FOR_FALL_CALC = %1.1f\n", S_DELTA_FOR_FALL_CALC);
-    }
-    else if (!strncmp(token, "ERUPTION_MASS", strlen("ERUPTION_MASS"))) {
-      token = strtok_r(NULL, space, ptr1);
-      ERUPTION_MASS = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "ERUPTION_MASS = %g\n", ERUPTION_MASS);
-    }
-    else if (!strncmp(token, "MAX_GRAINSIZE", strlen("MAX_GRAINSIZE"))) {
-      token = strtok_r(NULL, space, ptr1);
-      MAX_GRAINSIZE = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "MAX_GRAINSIZE = %.0f\n", MAX_GRAINSIZE);
-    }
-    else if (!strncmp(token, "MIN_GRAINSIZE", strlen("MIN_GRAINSIZE"))) {
-      token = strtok_r(NULL, space, ptr1);
-      MIN_GRAINSIZE = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "MIN_GRAINSIZE = %.0f\n", MIN_GRAINSIZE);
-    }
-    else if (!strncmp(token, "INTERVAL_DECIMAL_PHI", strlen("INTERVAL_DECIMAL_PHI"))) {
-      token = strtok_r(NULL, space, ptr1);
-      INTERVAL_DECIMAL_PHI = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "INTERVAL_DECIMAL_PHI = %.2f\n", INTERVAL_DECIMAL_PHI);
-    }
-    else if (!strncmp(token, "COLLAPSE_THEN_OFF", strlen("COLLAPSE_THEN_OFF"))) {
-      token = strtok_r(NULL, space, ptr1);
-      COLLAPSE_THEN_OFF = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "COLLAPSE_THEN_OFF = %d\n", COLLAPSE_THEN_OFF);
-    }
-    else if (!strncmp(token, "WRITE_DEPCENT_TRAJECTORY", strlen("WRITE_DEPCENT_TRAJECTORY"))) {
-      token = strtok_r(NULL, space, ptr1);
-      WRITE_DEPCENT_TRAJECTORY = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "WRITE_DEPCENT_TRAJECTORY = %d\n", WRITE_DEPCENT_TRAJECTORY);
-    }
-    else if (!strncmp(token, "WRITE_COLUMN_FILES", strlen("WRITE_COLUMN_FILES"))) {
-      token = strtok_r(NULL, space, ptr1);
-      WRITE_COLUMN_FILES = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "WRITE_COLUMN_FILES = %d\n", WRITE_COLUMN_FILES);
-    }
-    else if (!strncmp(token, "WRITE_DECIMAL_MASSLOADING", strlen("WRITE_COLUMN_FILES"))) {
-      token = strtok_r(NULL, space, ptr1);
-      WRITE_DECIMAL_MASSLOADING = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "WRITE_DECIMAL_MASSLOADING = %d\n", WRITE_DECIMAL_MASSLOADING);
-    }
-    else if (!strncmp(token, "WRITE_DECIMAL_FALL_TRAJ", strlen("WRITE_DECIMAL_FALL_TRAJ"))) {
-      token = strtok_r(NULL, space, ptr1);
-      WRITE_DECIMAL_FALL_TRAJ = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "WRITE_DECIMAL_FALL_TRAJ = %d\n", WRITE_DECIMAL_FALL_TRAJ);
-    }
-    else if (!strncmp(token, "WRITE_FALL_INFO_FILES", strlen("WRITE_FALL_INFO_FILES"))) {
-      token = strtok_r(NULL, space, ptr1);
-      WRITE_FALL_INFO_FILES = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "WRITE_FALL_INFO_FILES = %d\n", WRITE_FALL_INFO_FILES);
-    }
-    else if (!strncmp(token, "WRITE_CONF", strlen("WRITE_CONF"))) {
-      token = strtok_r(NULL, space, ptr1);
-      WRITE_CONF = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "WRITE_CONF = %d\n", WRITE_CONF);
-    }
-    else if (!strncmp(token, "WRITE_MASSLOADING", strlen("WRITE_MASSLOADING"))) {
-      token = strtok_r(NULL, space, ptr1);
-      WRITE_MASSLOADING = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "WRITE_MASSLOADING = %d\n", WRITE_MASSLOADING);
-    }
-    else if (!strncmp(token, "PRINT_PROGRESS", strlen("PRINT_PROGRESS"))) {
-      token = strtok_r(NULL, space, ptr1);
-      PRINT_PROGRESS = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "PRINT_PROGRESS = %d\n", PRINT_PROGRESS);
-    }
-    else if (!strncmp(token, "MEDIAN_GRAINSIZE", strlen("MEDIAN_GRAINSIZE"))) {
-      token = strtok_r(NULL, space, ptr1);
-      MEDIAN_GRAINSIZE = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "MEDIAN_GRAINSIZE = %.2f\n", MEDIAN_GRAINSIZE);
-    }
-    else if (!strncmp(token, "MINIMUM_DEPOSIT_FOR_MD_CALC", strlen("MINIMUM_DEPOSIT_FOR_MD_CALC"))) {
-      token = strtok_r(NULL, space, ptr1);
-      MINIMUM_DEPOSIT_FOR_MD_CALC = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "MINIMUM_DEPOSIT_FOR_MD_CALC = %.4f\n", MINIMUM_DEPOSIT_FOR_MD_CALC);
-    }
-    else if (!strncmp(token, "STD_GRAINSIZE", strlen("STD_GRAINSIZE"))) {
-      token = strtok_r(NULL, space, ptr1);
-      STD_GRAINSIZE = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "STD_GRAINSIZE = %.2f\n", STD_GRAINSIZE);
-    }
-    else if (!strncmp(token, "VENT_EASTING", strlen("VENT_EASTING"))) {
-      token = strtok_r(NULL, space, ptr1);
-      VENT_EASTING = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "VENT_EASTING = %.1f\n", VENT_EASTING);
-    }
-    else if (!strncmp(token, "VENT_NORTHING", strlen("VENT_NORTHING"))) {
-      token = strtok_r(NULL, space, ptr1);
-      VENT_NORTHING = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "VENT_NORTHING = %.1f\n", VENT_NORTHING);
-    }
-    else if (!strncmp(token, "VENT_ELEVATION", strlen("VENT_ELEVATION"))) {
-      token = strtok_r(NULL, space, ptr1);
-      VENT_ELEVATION = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "VENT_ELEVATION = %.1f\n", VENT_ELEVATION);
-    }
-    else if (!strncmp(token, "INITIAL_WATER_CONTENT", strlen("INITIAL_WATER_CONTENT"))) {
-      token = strtok_r(NULL, space, ptr1);
-      INITIAL_WATER_CONTENT = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "INITIAL_WATER_CONTENT = %.4f\n", INITIAL_WATER_CONTENT);
-    }
-    else if (!strncmp(token, "MAGMA_DISCHARGE_RATE", strlen("MAGMA_DISCHARGE_RATE"))) {
-      token = strtok_r(NULL, space, ptr1);
-      MAGMA_DISCHARGE_RATE = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "MAGMA_DISCHARGE_RATE = %.1f\n", MAGMA_DISCHARGE_RATE);
-    }
-    else if (!strncmp(token, "MAGMA_TEMPERATURE", strlen("MAGMA_TEMPERATURE"))) {
-      token = strtok_r(NULL, space, ptr1);
-      MAGMA_TEMPERATURE = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "MAGMA_TEMPERATURE = %.1f\n", MAGMA_TEMPERATURE);
-    }
-    else if (!strncmp(token, "MESH_SIZE_IN_KM", strlen("MESH_SIZE_IN_KM"))) {
-      token = strtok_r(NULL, space, ptr1);
-      MESH_SIZE_IN_KM = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "MESH_SIZE_IN_KM = %.2f\n", MESH_SIZE_IN_KM);
-    }
-    else if (!strncmp(token, "INITIAL_PLUME_VELOCITY", strlen("INITIAL_PLUME_VELOCITY"))) {
-      token = strtok_r(NULL, space, ptr1);
-      INITIAL_PLUME_VELOCITY = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "INITIAL_PLUME_VELOCITY = %.1f\n", INITIAL_PLUME_VELOCITY);
-    }
-    else if (!strncmp(token, "VENT_RADIUS", strlen("VENT_RADIUS"))) {
-      token = strtok_r(NULL, space, ptr1);
-      VENT_RADIUS = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "VENT_RADIUS = %.1f\n", VENT_RADIUS);
-    }
-    else if (!strncmp(token, "S_MAX", strlen("S_MAX"))) {
-      token = strtok_r(NULL, space, ptr1);
-      S_MAX = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "S_MAX = %.1f\n", S_MAX);
-    }
-    else if (!strncmp(token, "PLUME_THICKNESS", strlen("PLUME_THICKNESS"))) {        /* added by Kaz 09-Mar-2020 */
-      token = strtok_r(NULL, space, ptr1);
-      PLUME_THICKNESS = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "PLUME_THICKNESS = %.1f\n", PLUME_THICKNESS);
-    }
-    else if (!strncmp(token, "PLUME_RADIUS_CORRECTION", strlen("PLUME_RADIUS_CORRECTION"))) {        /* added by Kaz 09-Mar-2020 */
-      token = strtok_r(NULL, space, ptr1);
-      PLUME_RADIUS_CORRECTION = strtod(token, NULL);
-      if(WRITE_CONF) fprintf(stderr, "PLUME_RADIUS_CORRECTION = %.1f\n", PLUME_RADIUS_CORRECTION);
-    }
-    else continue;
-  }
-  (void) fclose(in_config);
-  return 0;
-}
-
 /*********************** */
 /* file output utilities */
 /* 1. x, y, z */
@@ -3718,17 +4473,7 @@ double calc_particle_terminal_velocity(double h, double ashdiam, double part_den
   return particle_terminal_velocity;
 }
 
-/*
- *	The phi scale is inverted (smaller values mean larger particles),
- *	so any incorrect ordering is automatically corrected by this function
- */
-void phiconvert(){
-	if(MIN_GRAINSIZE < MAX_GRAINSIZE){
-		int tmp = MIN_GRAINSIZE;
-		MIN_GRAINSIZE = MAX_GRAINSIZE;
-		MAX_GRAINSIZE = tmp;
-	}
-}
+
 
 /*
  * Compute mass fraction for a decimal phi bin.
@@ -3757,678 +4502,6 @@ double calc_pdf_fraction(double phi){				// calculate fraction of the particle s
 	return(frac);
 }
 
-/*
- * Global state variables for plume calculation.
- *
- * These variables are mainly used by plume_calculation() and
- * advance_plume_state_rk4(). They represent the current plume state,
- * atmospheric conditions, and model constants during plume integration.
- *
- * Note:
- * These are kept global to avoid passing a large number of tightly coupled
- * plume-state variables through the RK4 integration functions.
- */
-
-double g_dir;
-
-double Ra =  285;
-double Rg0 =  462;
-//double g =  9.81;
-
-
-double t0 =  293;	//293;
-double x, north, east;	// horizontal position; x means max length
-
-double p = 100000;	//101325.0;
-
-double ds;
-double dz;
-double U = -9999;
-double R = -9999;
-double n0;
-
-double rho_s = 1200;
-double rho_w = 1000;
-
-double Ca = 998; //713;
-double Cs = 1617; //1100;
-double Cv = 1850; //1850
-
-double theta = M_PI / 2; // PI / 2
-
-// param in func11
-double E, Cp, Cp0;
-
-// param in func12 - 15
-double M, Q, rho_c, rho_a, Ue, V;
-
-// param in func16
-int flag=0; //	0, gas-thrust;   1, buoyant;     2, umbrella
-			//  rho_a > rho_c    rho_a < rho_c   rho_a > rho_c
-
-// param in func17-19
-double n, Q0, Rg;
-
-
-double gz, gs;
-double ta, dp_over_dz;
-double smax;
-
-
-/////////////////////////////////[PART XX]///////////////////////////////// 
-//
-//
-//                           PLUME CALCULATION
-// build_plume_and_sources
-// 		plume_calculation
-//			makewindstruct
-// 			advance_plume_state_rk4
-// 				func12
-// 				func13
-// 				func14
-// 				func15
-// 				func16
-// 				func17
-// 				func18
-// 				func19
-// 				calc_plume_heat_capacity
-// 				calc_Cp0
-//
-// 
-// set_source_points_on_plume
-// 
-
-/*
- * Compute plume trajectory and define particle source points along it.
- *
- * First, solve the plume trajectory using input atmospheric data and store
- * the plume centerline coordinates, radius, and travel time.
- * Then, place discrete particle source points along the plume axis for
- * the fall and mass-loading calculations.
- *
- * Outputs:
- * - plume_trajX/Y/Z : plume centerline coordinates [m]
- * - plume_trajR     : plume radius [m]
- * - plume_trajT     : elapsed time from vent along plume axis [s]
- * - sourceX/Y/Z     : particle source coordinates [m]
- * - sourceRadius    : plume radius at each source point [m]
- * - sourceT         : elapsed time from vent to each source point [s]
- */
-void build_plume_and_sources(
-    int windlinenum,
-    double *wind_alt,
-    double *wind_v,
-    double *wind_dir,
-    double *wind_tmp,
-    double *wind_pres,
-    double **plume_trajX,
-    double **plume_trajY,
-    double **plume_trajZ,
-    double **plume_trajR,
-    double **plume_trajT,
-    double **sourceX,
-    double **sourceY,
-    double **sourceZ,
-    double **sourceRadius,
-    double **sourceT
-){
-    // allocate arrays for plume trajectory
-    *plume_trajX = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-    *plume_trajY = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-    *plume_trajZ = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-    *plume_trajR = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-    *plume_trajT = (double *)malloc(SDIM_FOR_PLUME_CALC * sizeof(double));
-
-	// compute plume centerline
-    Ht = plume_calculation(
-        windlinenum,
-        *plume_trajX, *plume_trajY, *plume_trajZ,
-        *plume_trajR, *plume_trajT,
-        wind_alt, wind_v, wind_dir, wind_tmp, wind_pres
-    );
-
-    // allocate arrays for particle source points
-    *sourceX = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-    *sourceY = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-    *sourceZ = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-    *sourceRadius = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-    *sourceT = (double *)malloc(SDIM_FOR_FALL_CALC * sizeof(double));
-
-	// interpolate source points along plume trajectory
-    set_source_points_on_plume(
-        *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT,
-        *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT
-    );
-}
-
-/*
- * Compute plume trajectory and source-point properties.
- *
- * This is the main plume calculation routine.
- * Starting from vent conditions, the plume state is advanced step by step
- * along the plume axis using advance_plume_state_rk4().
- *
- * At each step:
- * - plume state variables (Q, M, theta, E, etc.) are updated
- * - atmospheric conditions are interpolated from input data
- * - plume position and properties are stored as source points
- *
- * The integration continues until plume rise stops (theta <= 0 or M <= 0),
- * and the plume top height Ht is determined.
- *
- * Outputs:
- * - plume centerline trajectory
- * - source-point positions and properties for particle calculations
- * - plume height Ht
- */
-double plume_calculation(int imax, double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *taftervent, double *wind_alt, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres){	// The main routine in this file
-	int i = 0;
-	int total = imax; // total line number of wind file
-
-	double Hg = -9999, Hb = -9999, Ht = -9999;
-	double U0, R0;
-
-	double z0;
-	double T;
-	double time_after_vent = 0.0;
-	double gz_previous, x_previous, g_dir_previous, north_previous;
-	double east_previous, ta_previous, p_previous, rho_a_previous, rho_c_previous, n_previous;
-	double Q_previous, Cp_previous, Rg_previous, V_previous, M_previous; //theta_previous;
-	double U_previous, R_previous, T_previous;
-
-	n0 = INITIAL_WATER_CONTENT;
-	z0 = VENT_ELEVATION;
-    ds = S_DELTA_FOR_PLUME_CALC;
-
-	gz= z0;
-	gs = 0;
-	FILE *f, *f2;
-
-	T = MAGMA_TEMPERATURE;
-
-	makewindstruct(imax, wind_alt, wind_v, wind_dir, wind_tmp, wind_pres);
-
-	if(WRITE_COLUMN_FILES) f = fopen("plume.txt", "w");
-
-	// initialize
-
-	ta = calc_Tatm(gz, total);
-	p = calc_Patm(gz, total);
-	Cp0 = calc_Cp0();
-
-	rho_a = compute_air_density(p, ta);
-	n=n0;
-
-	Rg=Rg0;
-	rho_c=func17(n0, p, Rg, T); // get rho_c
-
-	if(n0 < 0 || n0 > 1){
-      fprintf(stderr,
-  	      "ERROR\nYou need proper INITIAL_WATER_CONTENT in config file\nPROGRAM HAS BEEN HALTED\n\n");
-      exit(1);
-	}
-
-	if(MAGMA_DISCHARGE_RATE < 0 || INITIAL_PLUME_VELOCITY < 0 || VENT_RADIUS < 0){
-		if(MAGMA_DISCHARGE_RATE < 0 && INITIAL_PLUME_VELOCITY > 0 && VENT_RADIUS > 0){
-			Q = rho_c * INITIAL_PLUME_VELOCITY * VENT_RADIUS * VENT_RADIUS;
-			U = INITIAL_PLUME_VELOCITY;
-			R = VENT_RADIUS;
-		}else if(MAGMA_DISCHARGE_RATE > 0 && INITIAL_PLUME_VELOCITY < 0 && VENT_RADIUS > 0){
-			Q = MAGMA_DISCHARGE_RATE / M_PI;	// mass flux is defined as pi * Q in Woodhouse et al. (2012)
-			U = Q / (rho_c * VENT_RADIUS * VENT_RADIUS);
-			R = VENT_RADIUS;
-		}else if(MAGMA_DISCHARGE_RATE > 0 && INITIAL_PLUME_VELOCITY > 0 && VENT_RADIUS < 0){
-			Q = MAGMA_DISCHARGE_RATE / M_PI;	// mass flux is defined as pi * Q in Woodhouse et al. (2012)
-			U = INITIAL_PLUME_VELOCITY;
-			R = sqrt(Q / (rho_c * INITIAL_PLUME_VELOCITY));
-		}else{
-	        fprintf(stderr,
-	    	      "ERROR\nYou need to assign at least two parameters properly from U, R and Q in the config file\nPROGRAM HAS BEEN HALTED 179\n\n");
-	        exit(1);
-		}
-	}else{
-        fprintf(stderr,
-    	      "ERROR\nYou need to assign at least two parameters properly from U, R and Q in the config file\nPROGRAM HAS BEEN HALTED 184\n\n");
-        exit(1);
-	}
-
-
-	// initialize (func 11)
-	// Q = rho_c * U * R * R;
-	M = rho_c * U * U * R * R;
-	E = Q * Cp0 * T;
-
-	Q0 = Q;
-	U0 = U;
-	R0 = R;
-
-	Cp = Cp0;
-
-	V = interpolate_wind_speed(gz, total);		// wind velocity
-	g_dir = interpolate_wind_direction_across_360(gz, total);	// wind direction
-	x = 0.0;
-	north = 0.0;
-	east = 0.0;
-    //sourceX[i] = east; sourceY[i] = north; sourceZ[i] = gz, sourceR[i] = R, taftervent[i] = time_after_vent;
-
-  // Calculate plume parameters until reaching Hb: See while loop after Line 259
-  if(WRITE_COLUMN_FILES){
-  	fprintf(f, "#z\ts\tx\tdir\tnorthing\teasting\tTa\tP\tatm_dens\tcol_dens\tn\t");
-		fprintf(f, "Q\tCp\tRg\tV\tUe\tM\ttheta\t");
-		fprintf(f, "U\tR\tTm\tTime\n");
-  }
-
-	if(S_MAX < 0){smax = 99999;}else{smax = S_MAX;}
-
-	//while(i < 100000 && M > 0.0 && theta > 0.0 && gs <= smax){	// Till 2023.08.08
-	while(i < SDIM_FOR_PLUME_CALC && M > 0.0 && theta > 0.0 && gs <= smax){
-		//Ht = gz; // when M < 0 (static) or theta < 0 (windy), z just before the height is considered as Ht
-		// top of the gas thrust region
-		if(flag==0 && rho_a - rho_c > 0){flag=1; Hg = gz;}	// top of the gas-thrust region
-		// top of the convective region
-		if(flag==1 && rho_a - rho_c < 0){flag=2; Hb = gz;}	// top of the convective region
-		if(WRITE_COLUMN_FILES){
-			T = E / Q / Cp;
-			fprintf(f, "%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t", gz, gs, x, g_dir, north, east, ta, p, rho_a, rho_c, n);
-			fprintf(f, "%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t", Q, Cp, Rg, V, Ue, M, theta);
-			fprintf(f, "%1.4f\t%1.4f\t%1.4f\t%1.4f\n", U, R, T, time_after_vent);
-		}
-
-		gz_previous = gz; x_previous = x; g_dir_previous = g_dir; north_previous = north;
-		east_previous = east; ta_previous = ta; p_previous = p; rho_a_previous = rho_a; rho_c_previous = rho_c; n_previous = n;
-		Q_previous = Q; Cp_previous = Cp; Rg_previous = Rg; V_previous = V; M_previous = M; //theta_previous = theta;
-		U_previous = U; R_previous = R; T_previous = T;
-		
-		advance_plume_state_rk4(total, T);
-		time_after_vent += ds / ((U_previous + U) / 2);
-		taftervent[i] = time_after_vent;
-		
-		if(theta > 0.0){ //No i increment before here means i = 0 is not at crater but at next step after the crater
-			sourceX[i] = east; sourceY[i] = north; sourceZ[i] = gz, sourceR[i] = R;
-		}else{
-			gz = gz_previous; 
-			Ht = gz;
-
-			x = x_previous; g_dir = g_dir_previous; north = north_previous;
-			east = east_previous; ta = ta_previous; p = p_previous; rho_a = rho_a_previous; rho_c = rho_c_previous; n = n_previous;
-			Q = Q_previous; Cp = Cp_previous; Rg = Rg_previous; V = V_previous; Ue = 0; M = M_previous; theta = 0;
-			U = U_previous; R = R_previous; T = T_previous;
-			i--;
-			//sourceX[i] = east; sourceY[i] = north; sourceZ[i] = Ht, sourceR[i] = R;	
-		}
-		//time_after_vent += ds / ((U_previous + U) / 2);
-		//taftervent[i] = time_after_vent;
-		//printf("L1652i = %d\n", i);
-		i++;
-	}
-	
-	// Processing when plume reached Ht
-	if(WRITE_COLUMN_FILES) {
-		f2 = fopen("plume_parameters.txt", "w");
-		fprintf(f2, "#Q0\tU0\tR0\tHg\tHb\tHt\tR@Ht\tColumnT\tAtmT\n");
-		fprintf(f2, "%1.4e\t%1.4e\t%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\n", Q0 * M_PI, U0, R0, Hg, Hb, Ht, R, T, ta);
-		fclose(f2);
-	}
-
-	if(Hb == -9999 && COLLAPSE_THEN_OFF){
-		if(WRITE_COLUMN_FILES) fclose(f);
-		printf("Plume collapsed. No tephra dispersal calculated.\n");
-		exit(1);
-	}
-
-	PLUME_HEIGHT = Ht;
-    gs = gs - ds;
-
-	// Print out plume parameters after reaching Hb
-	V = interpolate_wind_speed(Ht, total);
-	while (i < SDIM_FOR_PLUME_CALC){
-		gs = gs + ds;
-		x += ds * cos(theta);
-		north = north + ds * cos(g_dir / 360 * 2 * M_PI);
-		east = east + ds * sin(g_dir / 360 * 2 * M_PI);
-		if(WRITE_COLUMN_FILES){
-			fprintf(f, "%1.4f\t%1.4f\t%1.4f\t%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t", Ht, gs, x, g_dir, north, east, ta, p, rho_a, rho_c, n);
-			fprintf(f, "%1.4e\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t", Q, Cp, Rg, V, Ue, M, theta);
-			fprintf(f, "%1.4f\t%1.4f\t%1.4f\t%1.4f\n", V, R, T, time_after_vent);
-		}
-    	//printf("i = %d\n", i);
-		sourceX[i] = east; sourceY[i] = north; sourceZ[i] = Ht, sourceR[i] = R;
-		time_after_vent += ds / V;
-		taftervent[i] = time_after_vent;
-		i++;
-	}
-
-	if(WRITE_COLUMN_FILES) fclose(f);
-	//printf("kokodayo %1.4f\t%d\n", S_MAX, SDIM_FOR_FALL_CALC);
-	//read_plume_file(SDIM_FOR_FALL_CALC);
-
-	return(Ht);
-}
-
-
-/*
- * Advance plume state by one step using 4th-order Runge-Kutta (RK4).
- *
- * This function integrates the governing plume equations along the
- * trajectory coordinate s, updating:
- *   Q      : mass flux
- *   M      : momentum flux
- *   theta  : plume angle
- *   E      : energy flux
- *
- * At each RK stage, atmospheric conditions (pressure, temperature,
- * wind speed/direction) are interpolated based on height.
- *
- * The plume properties (density, velocity, radius, etc.) are updated
- * consistently with the current state.
- */
-void advance_plume_state_rk4(int total, double T){
-	//double dp_over_ds, dQ_over_ds, dM_over_ds, dtheta_over_ds, dE_over_ds;
-	//double dp_over_ds1, dQ_over_ds1, dM_over_ds1, dtheta_over_ds1, dE_over_ds1;
-	//double dp_over_ds2, dQ_over_ds2, dM_over_ds2, dtheta_over_ds2, dE_over_ds2;
-	//double dp_over_ds3, dQ_over_ds3, dM_over_ds3, dtheta_over_ds3, dE_over_ds3;
-
-	double dQ_over_ds, dM_over_ds, dtheta_over_ds, dE_over_ds;
-	double dQ_over_ds1, dM_over_ds1, dtheta_over_ds1, dE_over_ds1;
-	double dQ_over_ds2, dM_over_ds2, dtheta_over_ds2, dE_over_ds2;
-	double dQ_over_ds3, dM_over_ds3, dtheta_over_ds3, dE_over_ds3;
-	double dQ_over_ds4, dM_over_ds4, dtheta_over_ds4, dE_over_ds4;
-	double dx;
-
-	double E_tmp, M_tmp, rho_a_tmp, rho_c_tmp, p_tmp, theta_tmp, Q_tmp;
-
-	E_tmp = E; M_tmp = M; rho_a_tmp=rho_a; rho_c_tmp=rho_c; theta_tmp = theta; Q_tmp = Q;
-
-
-	/////////////////////////////////
-	// k1     ///////////////////////
-	//dp_over_ds1 = compute_pressure_gradient(p, ta);
-	dQ_over_ds1 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
-	dM_over_ds1 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
-	dtheta_over_ds1 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
-	dE_over_ds1 =     func15(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, ta, theta, dQ_over_ds1);
-
-	/////////////////////////////////////////////////
-	// generate next step parameters-----------------
-	Q_tmp = Q + dQ_over_ds1 * ds * 0.5;
-	M_tmp = M + dM_over_ds1 * ds * 0.5;
-	theta_tmp = theta + dtheta_over_ds1 * ds * 0.5;
-	E_tmp = E + dE_over_ds1 * ds * 0.5;
-
-	// centre position of the next step
-	dz = ds * sin(theta_tmp) * 0.5;
-
-
-	// atmosphreic content of the next step
-	n = func18(Q_tmp);				// calc n
-	p_tmp = calc_Patm(gz+ dz, total);
-	ta = calc_Tatm(gz+ dz, total);
-	rho_a_tmp = compute_air_density(p_tmp, ta);
-
-	Cp = calc_plume_heat_capacity(n);					// calc Cp
-	//printf("k1\n");
-	V  = interpolate_wind_speed(gz+ dz, total);
-
-	T = E_tmp / Q_tmp / Cp;
-
-	Rg = func19(n);					// calc Rg
-	rho_c_tmp = func17(n, p_tmp, Rg, T);	// calc plume density (rho_c)
-
-	Ue = func16(M_tmp, Q_tmp, theta_tmp, V);
-	U = M_tmp / Q_tmp;
-	R = sqrt(Q_tmp / (U * rho_c));
-
-	/////////////////////////////////
-	// k2     ///////////////////////
-	//dp_over_ds2 = compute_pressure_gradient(p_tmp, ta);
-	dQ_over_ds2 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
-	dM_over_ds2 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
-	dtheta_over_ds2 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
-	dE_over_ds2 =     func15(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, ta, theta, dQ_over_ds1);
-
-	/////////////////////////////////////////////////
-	// generate next step parameters-----------------
-	Q_tmp = Q + dQ_over_ds2 * ds * 0.5;
-	M_tmp = M + dM_over_ds2 * ds * 0.5;
-	theta_tmp = theta + dtheta_over_ds2 * ds * 0.5;
-	E_tmp = E + dE_over_ds2 * ds * 0.5;
-
-	// centre position of the next step
-	dz = ds * 0.5 * sin(theta_tmp);
-
-
-	// atmosphreic content of the next step
-	n = func18(Q_tmp);				// calc n
-	p_tmp = calc_Patm(gz+ dz, total);
-	ta = calc_Tatm(gz+ dz, total);
-	rho_a_tmp = compute_air_density(p_tmp, ta);
-
-	Cp = calc_plume_heat_capacity(n);					// calc Cp
-	//printf("k2\n");
-	V = interpolate_wind_speed(gz+ dz, total);
-
-	T = E_tmp / Q_tmp / Cp;
-
-	Rg = func19(n);					// calc Rg
-	rho_c_tmp = func17(n, p_tmp, Rg, T);	// calc plume density (rho_c)
-
-	Ue = func16(M_tmp, Q_tmp, theta_tmp, V);
-	U = M_tmp / Q_tmp;
-	R = sqrt(Q_tmp / (U * rho_c));
-
-	/////////////////////////////////
-	// k3     ///////////////////////
-	//dp_over_ds3 = compute_pressure_gradient(p_tmp, ta);
-	dQ_over_ds3 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
-	dM_over_ds3 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
-	dtheta_over_ds3 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
-	dE_over_ds3 =     func15(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, ta, theta, dQ_over_ds2);
-
-	/////////////////////////////////////////////////
-	// generate next step parameters-----------------
-	Q_tmp = Q + dQ_over_ds3 * ds;
-	M_tmp = M + dM_over_ds3 * ds;
-	theta_tmp = theta + dtheta_over_ds3 * ds;
-	E_tmp = E + dE_over_ds3 * ds;
-
-	// centre position of the next step
-	dz = ds * sin(theta_tmp);
-
-
-	// atmosphreic content of the next step
-	n = func18(Q_tmp);				// calc n
-	p_tmp = calc_Patm(gz+ dz, total);
-	ta = calc_Tatm(gz+ dz, total);
-	rho_a_tmp = compute_air_density(p_tmp, ta);
-
-	Cp = calc_plume_heat_capacity(n);					// calc Cp
-	//printf("k3\n");
-	V = interpolate_wind_speed(gz+ dz, total);
-
-	T = E_tmp / Q_tmp / Cp;
-
-	Rg = func19(n);					// calc Rg
-	rho_c_tmp = func17(n, p_tmp, Rg, T);	// calc plume density (rho_c)
-
-	Ue = func16(M_tmp, Q_tmp, theta_tmp, V);
-	U = M_tmp / Q_tmp;
-	R = sqrt(Q_tmp / (U * rho_c));
-
-	/////////////////////////////////
-	// k4     ///////////////////////
-	//dp_over_ds4 = compute_pressure_gradient(p_tmp, ta);
-	dQ_over_ds4 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
-	dM_over_ds4 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
-	dtheta_over_ds4 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
-	dE_over_ds4 =     func15(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, ta, theta, dQ_over_ds3);
-
-	////////////////////////////////////
-	////////////////////////////////////
-	//// set new step value   //////////
-
-	//dp_over_ds = 	 (dp_over_ds1 + 2 * dp_over_ds2 + 2 * dp_over_ds3 + dp_over_ds4)/6;
-	dQ_over_ds = 	 (dQ_over_ds1 + 2 * dQ_over_ds2 + 2 * dQ_over_ds3 + dQ_over_ds4)/6;
-	dM_over_ds = 	 (dM_over_ds1 + 2 * dM_over_ds2 + 2 * dM_over_ds3 + dM_over_ds4)/6;
-	dtheta_over_ds = (dtheta_over_ds1 + 2 * dtheta_over_ds2 + 2 * dtheta_over_ds3 + dtheta_over_ds4)/6;
-	dE_over_ds =     (dE_over_ds1 + 2 * dE_over_ds2 + 2 * dE_over_ds3 + dE_over_ds4)/6;
-
-
-	//printf("U = %1.1f\tdQ_over_ds=%1.4f\tdM_over_ds=%1.4f\n", U, dQ_over_ds, dM_over_ds);
-
-	// generate next step parameters
-	Q = Q + dQ_over_ds * ds;
-	M = M + dM_over_ds * ds;
-	if(M<0){M=0;}
-	theta = theta + dtheta_over_ds * ds;
-	E = E + dE_over_ds * ds;
-
-	// centre position of the next step
-	dx = ds * cos(theta);
-	dz = ds * sin(theta);
-	north = north + dx * cos(g_dir / 360 * 2 * M_PI);
-	east = east + dx * sin(g_dir / 360 * 2 * M_PI);
-	x = x + dx;
-	gs= gs+ ds;
-	gz= gz+ dz;
-
-	// atmosphreic content of the next step
-	n = func18(Q);				// calc n
-	p = calc_Patm(gz, total);
-	ta = calc_Tatm(gz, total);
-	rho_a = compute_air_density(p, ta);
-
-	Cp = calc_plume_heat_capacity(n);					// calc Cp
-	//printf("k4\n");
-	V = interpolate_wind_speed(gz, total);
-	g_dir = interpolate_wind_direction_across_360(gz, total);
-
-
-
-	T = E / Q / Cp;
-
-	Rg = func19(n);					// calc Rg
-	rho_c = func17(n, p, Rg, T);	// calc plume density (rho_c)
-
-	Ue = func16(M, Q, theta_tmp, V);
-	U = M / Q;
-	R = sqrt(Q / (U * rho_c));
-}
-
-/* */
-/* Function numbers correspond that in Woodhouse et al (2012) */
-double func12(double M_tmp, double rho_a_tmp, double rho_c_tmp, double Q_tmp){			// plume mass flux
-	double dQ_over_ds;
-
-	dQ_over_ds = 2 * rho_a_tmp * Ue * Q_tmp / sqrt(rho_c_tmp * M_tmp);
-
-	//printf("%1.4f\n", dQ_over_ds);
-	return dQ_over_ds;
-}
-
-double func13(double rho_a_tmp, double rho_c_tmp, double M_tmp, double theta_tmp, double Q_tmp){
-	double dM_over_ds;
-
-	dM_over_ds = GRAVITY * (rho_a_tmp - rho_c) * Q_tmp * Q_tmp / (rho_c_tmp * M_tmp) * sin(theta_tmp);
-	dM_over_ds = dM_over_ds + 2 * rho_a_tmp * Q_tmp / sqrt(rho_c_tmp * M_tmp) * Ue * V * cos(theta_tmp);
-
-	return dM_over_ds;
-}
-
-double func14(double M_tmp, double Q_tmp, double rho_a_tmp, double rho_c_tmp, double theta_tmp){
-	double dtheta_over_ds;
-
-	dtheta_over_ds = GRAVITY * (rho_a_tmp - rho_c_tmp) * Q_tmp * Q_tmp * cos(theta_tmp) / (rho_c_tmp * M_tmp * M_tmp);
-	dtheta_over_ds = dtheta_over_ds - 2 * rho_a_tmp * Q_tmp * Ue * V * sin(theta_tmp) / (M * sqrt(rho_c_tmp * M_tmp));
-
-	//printf("dtheta = %1.4f\n", dtheta_over_ds);
-	return dtheta_over_ds;
-}
-
-double func15(double M_tmp, double Q_tmp, double rho_a_tmp, double rho_c_tmp, double Ta, double theta_tmp, double dQ_over_ds){
-	double dE_over_ds;
-	double term1, term2, term3, term4;
-
-	term1 = (Ca * Ta + Ue * Ue / 2) * dQ_over_ds;
-	term2 = M_tmp * M_tmp / (2 * Q_tmp * Q_tmp) * dQ_over_ds;
-	term3 = rho_a_tmp / rho_c_tmp * Q_tmp * GRAVITY * sin(theta_tmp);
-	term4 = 2 * rho_a_tmp * Ue * V * cos(theta_tmp) * sqrt(M_tmp / rho_c_tmp);
-	dE_over_ds = term1 + term2 - term3 - term4;
-
-	return dE_over_ds;
-}
-
-double func16(double M_tmp, double Q_tmp, double theta_tmp, double V_tmp){
-	double ue_tmp;
-	double ks_tmp;
-
-	//if(flag==0){ks_tmp=sqrt(rho_a/rho_c)/16;}
-	//else{ks_tmp=ks;}	// use these lines when you use ks for gas thrust region; include rho_a and rho_c as local
-
-	ks_tmp=ENTRAIN_COEFF_KS;	// gas thrust region also assumes 0.09
-				// remove this line when you take
-				// ks = f(rho_a. rho_c)
-
-	//printf("flag=%d\tks=%1.4f\n", flag, ks_tmp);
-
-	ue_tmp = ks_tmp * fabs(M_tmp/Q_tmp - V_tmp * cos(theta_tmp)) + ENTRAIN_COEFF_KW * fabs(V_tmp * sin(theta_tmp));
-
-	return ue_tmp;
-}
-
-double func17(double n_tmp, double p_tmp, double Rg_tmp, double T_tmp){			// plume density
-	double rho_tmp;
-
-	rho_tmp = (1 - n_tmp) / rho_s + n_tmp * Rg_tmp * T_tmp / p_tmp;
-	rho_c = 1 / rho_tmp;
-	//printf("rho     = %1.4f\n", rho);
-	return rho_c;
-}
-
-double func18(double Q_tmp){			// solid content in the plume
-	double n_tmp;
-	n_tmp = 1 - (1 - n0) * Q0 / Q_tmp;
-
-	return n_tmp;
-}
-
-double func19(double n_tmp){
-	double Rg_tmp;
-	Rg_tmp = Ra + (Rg0 - Ra) * n0 * (1 - n_tmp) / (n_tmp * (1 - n0));
-
-	return Rg_tmp;
-}
-
-/* End of Woodhouse functions*/
-
-/*
- * Compute mixture heat capacity Cp for a given gas fraction n.
- * (Equation 20 in Woodhouse et al.)
- *
- * Cp is linearly interpolated between:
- * - Ca : heat capacity of air
- * - Cp0: initial mixture heat capacity
- *
- * using gas fraction n:
- *
- *   Cp = Ca + (Cp0 - Ca) * (1 - n) / (1 - n0)
- */
-double calc_plume_heat_capacity(double n_tmp){
-	double Cp_tmp;
-	Cp_tmp = Ca + (Cp0 - Ca) * (1 - n_tmp) / (1 - n0);
-
-	return Cp_tmp;
-}
-
-/*
- * Compute mixture initial specific heat capacity of plume (Cp0).
- *
- * n0 = initial gas fraction
- * Cv = specific heat capacity of water vapor
- * Cs = specific heat capacity of solid pyroclast
- */
-double calc_Cp0(){
-	return n0 * Cv + (1 - n0) * Cs;
-}
 
 /*
  * Interpolate atmospheric temperature at height h
@@ -4576,30 +4649,6 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
 	}
 	//printf("dir\t%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\n", i, z, ratio, dir, wind1, wind2);
 	return dir;
-}
-
-/*
- * Build WIND structure array from input atmospheric data arrays.
- *
- * This function converts separate arrays (altitude, wind speed,
- * direction, temperature, pressure) into an array of WIND structures.
- */
-void makewindstruct(int imax, double *alt, double *v, double *dir, double *temp, double *pres){
-	W1 = (WIND *)malloc((imax) * sizeof(WIND));
-
-	for(int i = 0; i < imax; i++){
-    W1[i].day=0;
-    W1[i].hour=0;
-    W1[i].wind_height=alt[i];
-    W1[i].wind_speed=v[i];
-    W1[i].wind_dir=dir[i];
-		W1[i].t_atm=temp[i];
-		W1[i].p_atm=pres[i];
-	}
-
-	/*for(int i = 0; i < imax; i++){
-		printf("%d\t%1.4f\t%1.4f\n", i, W1[i].wind_dir, W1[i].wind_speed);
-	}*/
 }
 
 

@@ -743,6 +743,21 @@ int main(int argc, char *argv[]) {
 		r
 	);
 
+	// ==============================
+	// [7] Output
+	// ==============================
+	// [7.1] write_deposit_summary
+	// [7.1.1.] write_vertical_profiles_for_phi
+	// [7.1.2.] write_particle_release_theoretical_vs_actual
+	// [7.1.3.] write_massrelease_per_source_phi
+
+	// [7.2] write_plume_files
+	// [7.4] write_particle_release_theoretical_vs_actual
+	// [7.5] write_total_massloading
+	// [7.6] write_massloading_loc_source_phi
+	// [7.7] write_massloading_per_phidec_at_locations
+
+
 	/* 7. OUTPUT */
 	/* 7.1. falltime and drift */
 	if(WRITE_FALL_INFO_FILES){	// DEFINED IN CONFIG FILE
@@ -2141,16 +2156,20 @@ void interpolate_atmosphere_and_wind(int windlinenum, double *h, double *atmT, d
 
 // --- GPU buffer / wrapper ---
 // [5.6.1.]  prepare_mass_loading
-// [5.6.2.]  compute_mass_loading
-// [5.6.3.]  cleanup_buffers
+// [5.6.2.]  allocate_device_buffers_struct
+// [5.6.3.]  pack_fixed_data_buffers
+// [5.6.4.]  copy_fixed_data_to_device_buffers
+// [5.6.5.]  compute_mass_loading
+// [5.6.6.]  pack_location_data_buffers
+// [5.6.7.]  copy_location_data_to_device_buffers
+// [5.6.8.]  launch_mass_loading_kernels_buffers
+// [5.6.9.]  copy_result_to_host_buffers
+// [5.6.10.]  cleanup_buffers
+// [5.6.11.]accumulate_massloading_for_phi
 
-// [5.6.4.]  allocate_device_buffers_struct
-// [5.6.5.]  pack_fixed_data_buffers
-// [5.6.6.]  copy_fixed_data_to_device_buffers
-// [5.6.7.]  pack_location_data_buffers
-// [5.6.8.]  copy_location_data_to_device_buffers
-// [5.6.9.]  launch_mass_loading_kernels_buffers
-// [5.6.10]  copy_result_to_host_buffers
+// CPU functions
+// [5.5.1b] calc_mass_loading_element
+// [5.5.2b] calc_mass_loading_location
 
 
 /*[5.1.]
@@ -3007,12 +3026,10 @@ void write_plume_files(
 }
 
 
-
-
-
-
 /*
  * Free all dynamically allocated memory used in the simulation.
+ *
+ * [9.1.]
  *
  * This includes:
  * - input data arrays
@@ -3132,7 +3149,7 @@ void free_all(
 
 /*
  * Store 1D vertical profile into a 2D array indexed by (phi, z).
- *
+ * [unclasified]
  * Copies:
  *   src[z] → dst[phi, z]
  *
@@ -3146,6 +3163,8 @@ void store_profile_for_phi(int phiint, double *src, double *dst){
 
 /*
  * Write vertical profiles indexed by (phi, z).
+ *
+ * [7.1.1]
  *
  * Outputs a table where:
  * - rows correspond to height index z
@@ -3238,6 +3257,8 @@ void clear_array(int dim, double *ary){
 
 
 #ifdef CUDA
+
+/* [5.6.1.] */
 /* Step 3-5 of calc_mass_loading:
  * Preparation stage of calc_mass_loading.
  * Allocate device buffers and initialize fixed data.
@@ -3274,6 +3295,7 @@ static void prepare_mass_loading(
 }
 
 /***************************
+/* [5.6.2.]
  * Step 3 of calc_mass_loading:
  * Allocate device (GPU) buffers.
  *
@@ -3345,6 +3367,7 @@ static void allocate_device_buffers_struct(Buffers *b, int chunk_locdim)
 /* end of step 3*/
 
 /***************************
+/* [5.6.3.]
  * Step 4 of calc_mass_loading:
  * Pack fixed data into host buffers (CPU → GPU preparation).
  *
@@ -3403,7 +3426,9 @@ static void pack_fixed_data_buffers(
 }
 /* End of Step 4*/
 
+
 /**************************
+/* [5.6.4.]
  * Step 5 of calc_mass_loading:
  * Copy fixed host buffers to device buffers.
  *
@@ -3456,6 +3481,7 @@ static void copy_fixed_data_to_device_buffers(Buffers *b)
 /* end of Step 5 */
 
 
+/* 5.6.5. */
 /* Step 6 of calc_mass_loading:
  * Compute mass loading for a chunk of locations using GPU.
  *
@@ -3502,6 +3528,7 @@ static void compute_mass_loading(
 
 
 /***************************
+/* [5.6.7.]
  * Step 6a (1/4) of calc_mass_loading:
  * Pack location data into host buffers for the current chunk.
  *
@@ -3543,6 +3570,7 @@ static void pack_location_data_buffers(
 /* End of Step 6a */
 
 /**************************
+/* [5.6.7.]
  * Step 6b (2/4) of calc_mass_loading:
  * Copy location data for the current chunk from host to device.
  *
@@ -3585,6 +3613,7 @@ static void copy_location_data_to_device_buffers(Buffers *b, int locN)
 /* end of Step 6b*/
 
 /**************************
+ * [5.6.8.] 
  * Step 6c of calc_mass_loading:
  * Launch CUDA kernels for the current location chunk.
  *
@@ -3657,6 +3686,7 @@ static void launch_mass_loading_kernels_buffers(
 /* end of Step 6c*/
 
 /**************************
+ * [5.6.9]
  * Step 6d (4/4) of calc_mass_loading (per chunk):
  * Copy computed results from device to host and store them.
  *
@@ -3691,7 +3721,7 @@ static void copy_result_to_host_buffers(Buffers *b, double *ttlml, int loc0, int
 }
 /* end of Step 6d */
 
-/*
+/* [5.6.10.]
  * Step 7 of calc_mass_loading:
  * Cleanup buffers.
  *
@@ -3727,7 +3757,8 @@ static void cleanup_buffers(Buffers *b)
 /* end of Step 7 */
 
 
-/*
+/* 
+ * [5.6.11]
  * Accumulate mass loading for the current integer phi class.
  *
  * For each ground location j:
@@ -3746,6 +3777,9 @@ void accumulate_massloading_for_phi(int phiint, double *tmp, double *ttl, double
 #endif
 
 /* NON CUDA FUNCTIONS (START)*/
+//
+// [5.5.1b.]
+//
 // D01a
 // Calculate mass loading of a certain grain size on a certain point on the ground (Sloc) from a certain source: Sloc(phi, s)
 void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *massreleased){
@@ -3787,6 +3821,9 @@ void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_cente
 } // End of the function
 
 // D01b
+//
+// [5.5.2b]
+//
 // Calculate mass loading on a certain grain size on a certain point on the ground.
 // All grainsizes and sources are summed up from the "elements", which is calculated by D01a.
 void calc_mass_loading_location(int phiint, double *massloading_loc_source_phi, double *massloading, double *ttl, double *cummassphi){
@@ -4504,7 +4541,7 @@ void compute_theoretical_particle_release(RELEASE *r){
 }
 
 
-/*
+/* [7.1.2]
  * Due to the upper limit of SDIM, particles that would fall beyond
  * the maximum source distance are not included in the calculation.
  *
@@ -4525,6 +4562,7 @@ void write_particle_release_theoretical_vs_actual(RELEASE *r){
 	fclose(outfile);
 }
 
+// [7.1.3.]
 /* Write mass release per source point for each integer phi class */
 void write_massrelease_per_source_phi(SEG *r){
 	FILE *outfile;

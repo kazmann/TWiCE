@@ -743,23 +743,15 @@ int main(int argc, char *argv[]) {
 		r
 	);
 
-	// ==============================
-	// [7] Output
-	// ==============================
-	// [7.1] write_deposit_summary
-	// [7.1.1.] write_vertical_profiles_for_phi
-	// [7.1.2.] write_particle_release_theoretical_vs_actual
-	// [7.1.3.] write_massrelease_per_source_phi
 
-	// [7.2] write_plume_files
-	// [7.4] write_particle_release_theoretical_vs_actual
-	// [7.5] write_total_massloading
-	// [7.6] write_massloading_loc_source_phi
-	// [7.7] write_massloading_per_phidec_at_locations
+	/* 7.1. massloading and isopach */
+	store_total_massloading_and_mean_phi(location_properties, ttlmassloading, cummassphi);	//calculate mean diameter for each location
+	if(WRITE_MASSLOADING){write_deposit_summary(location_properties);		//massloading.txt
+	createisopachdata(location_properties);}						//S_vs_Area.txt
 
 
 	/* 7. OUTPUT */
-	/* 7.1. falltime and drift */
+	/* 7.2. Particle relase and diffusion */
 	if(WRITE_FALL_INFO_FILES){	// DEFINED IN CONFIG FILE
 	const char *name1 = "falltime.txt";
 	write_vertical_profiles_for_phi(name1, h, ttlfalltime_phiint, MAX_GRAINSIZE + 1, MIN_GRAINSIZE - MAX_GRAINSIZE, -1);
@@ -770,11 +762,6 @@ int main(int argc, char *argv[]) {
 	write_particle_release_theoretical_vs_actual(r);			//particle_released.txt
 	write_massrelease_per_source_phi(massreleased_per_ds); //segregation_per_ds.txt
 	}
-
-	/* 7.2. massloading and isopach */
-	store_total_massloading_and_mean_phi(location_properties, ttlmassloading, cummassphi);	//calculate mean diameter for each location
-	if(WRITE_MASSLOADING){write_deposit_summary(location_properties);		//massloading.txt
-	createisopachdata(location_properties);}						//S_vs_Area.txt
 	
 	/* 8. CLEAN UP */
 	free_all(
@@ -2980,51 +2967,6 @@ __global__ void funcD01b(
 
 /////////////////////[END OF THE PART 05]/////////////////////
 
-/*
- * Write plume trajectory and particle source positions to files.
- *
- * plumetraj.txt:
- *   Centerline of the plume obtained by solving the plume differential equations.
- *   Each entry corresponds to a point along the plume axis.
- *
- * plumesourceposition.txt:
- *   Discrete particle release points distributed along the plume axis.
- *   These serve as sources of particle emission for the fall calculation.
- */
-void write_plume_files(
-    int WRITE_COLUMN_FILES,
-    int SDIM_FOR_PLUME_CALC,
-    int SDIM_FOR_FALL_CALC,
-    double *plume_trajX,
-    double *plume_trajY,
-    double *plume_trajZ,
-    double *plume_trajR,
-    double *plume_trajT,
-    double *sourceX,
-    double *sourceY,
-    double *sourceZ,
-    double *sourceRadius,
-    double *sourceT
-){
-    if(WRITE_COLUMN_FILES){
-        FILE *outfile = fopen("plumetraj.txt", "w");
-        const char *header = "calc_step\tx\ty\tz\tR\ttime\n";
-        printxyzq(outfile, header, SDIM_FOR_PLUME_CALC,
-                  plume_trajX, plume_trajY, plume_trajZ,
-                  plume_trajR, plume_trajT);
-        fclose(outfile);
-    }
-
-    if(WRITE_COLUMN_FILES){
-        FILE *outfile = fopen("plumesourceposition.txt", "w");
-        const char *header = "source\tx\ty\tz\tR\ttime\n";
-        printxyzq(outfile, header, SDIM_FOR_FALL_CALC,
-                  sourceX, sourceY, sourceZ,
-                  sourceRadius, sourceT);
-        fclose(outfile);
-    }
-}
-
 
 /*
  * Free all dynamically allocated memory used in the simulation.
@@ -3159,49 +3101,6 @@ void store_profile_for_phi(int phiint, double *src, double *dst){
     for(int z = 0; z < ZDIM; z++){
         dst[z + phiint * ZDIM] = src[z];
     }
-}
-
-/*
- * Write vertical profiles indexed by (phi, z).
- *
- * [7.1.1]
- *
- * Outputs a table where:
- * - rows correspond to height index z
- * - columns correspond to phi classes
- *
- * Data layout:
- *   profile_by_phi[z + phi * ZDIM]
- *
- * Used for fall time, drift, and other height-dependent quantities.
- */
-void write_vertical_profiles_for_phi(
-    const char *filename,
-    double *h,
-    double *profile_by_phi,
-    double base,
-    int stepnum,
-    double stepdelta
-){
-    FILE *outfile = fopen(filename, "w");
-
-    // write header
-    fprintf(outfile, "z\th(m)");
-    for(int phiint = 0; phiint < stepnum; phiint++){
-        fprintf(outfile, "\tphi%1.1f", base - phiint * stepdelta);
-    }
-    fprintf(outfile, "\n");
-
-    // write data (top → bottom)
-    for(int z = ZDIM - 1; z >= 0; z--){
-        fprintf(outfile, "%d\t%1.1f", z, h[z]);
-        for(int phiint = 0; phiint < stepnum; phiint++){
-            fprintf(outfile, "\t%1.4f", profile_by_phi[z + phiint * ZDIM]);
-        }
-        fprintf(outfile, "\n");
-    }
-
-    fclose(outfile);
 }
 
 /*
@@ -3870,8 +3769,19 @@ void store_massloading_for_phi(int size, DEP *location_properties, double *loadi
 	}
 }
 
+/////////////////////////////////[PART 06]///////////////////////////////// 
+// ==============================
+// [6] Post-processing
+// ==============================
+// [6.1.] store_total_massloading_and_mean_phi
+// [6.2.] createisopachdata
+// [6.2.1.] generate_isopach_analysis
+
+
 /*
  * Store total mass loading and mean grain size at each location.
+ *
+ * [6.1.]
  *
  * For each ground location j:
  * - assign total mass loading (ttlmassloading)
@@ -3892,248 +3802,9 @@ void store_total_massloading_and_mean_phi(DEP *location_properties, double *ttlm
 }
 
 /*
- * Write final deposit results at all locations to file.
- *
- * Output file:
- *   massloading.txt
- *
- * Each row corresponds to one location j and contains:
- * - coordinates (x, y, z) [m]
- * - distance from vent [m]
- * - total mass loading [kg/m^2]
- * - fraction of particles smaller than 1 mm [%]
- * - mean grain size (phi)
- * - mass loading for each integer phi class
- *
- * Notes:
- * - Coordinates are shifted by vent position (VENT_EASTING/NORTHING).
- * - Phi classes are written from coarse to fine.
- */
-void write_deposit_summary(DEP *location_properties){
-	FILE *outfile;
-	outfile = fopen("massloading.txt", "w");
-
-	/*write header*/
-	fprintf(outfile, "x(m)\ty(m)\tz(m)\tdistfromvent(m)");
-	fprintf(outfile, "\tttlmassloading(kg/sq-m)\tF(percent)\tMean(phi)");
-	for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
-		fprintf(outfile, "\t%1.0fphi", MAX_GRAINSIZE + phiint + 1);
-	}
-	fprintf(outfile, "\n");
-
-	/*write data*/
-	for(int j = 0; j < LOCDIM; j++){
-		fprintf(outfile, "%1.0f\t%1.0f\t%1.0f\t%1.1f", location_properties[j].x + VENT_EASTING, location_properties[j].y + VENT_NORTHING, location_properties[j].z, location_properties[j].dist);
-		double fraction = 0.0;
-		if(location_properties[j].ttlmassloading > 0){
-			fraction = location_properties[j].smallerthan1mm /
-					location_properties[j].ttlmassloading * 100.0;
-}
-		fprintf(outfile, "\t%1.4e\t%1.4f\t%1.4f", location_properties[j].ttlmassloading, fraction, location_properties[j].meandiameter);
-		for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
-			fprintf(outfile, "\t%1.4e", location_properties[j].dep[phiint]);
-		}
-		fprintf(outfile, "\n");
-	}
-	fclose(outfile);
-}
-
-
-
-/*********************** */
-/* file output utilities */
-/* 1. x, y, z */
-void printxyz(FILE *in, const char *header, int imax, double *sourceX, double *sourceY, double *sourceZ){
-  fprintf(in, "%s", header);
-  for(int i = 0; i < imax; i++){
-    fprintf(in, "%d\t%1.4f\t%1.4f\t%1.4f\n", i, sourceX[i], sourceY[i], sourceZ[i]);
-  }
-}
-
-/* 2. x, y, z, q */
-void printxyzq(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q, double *t){
-  fprintf(in, "%s", header);
-  for(int i = 0; i < imax; i++){
-    fprintf(in, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\n", i, x[i], y[i], z[i], q[i], t[i]);
-  }
-}
-
-/* 3. x, y, z, *exp */
-void printxyze(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q){
-  fprintf(in, "%s", header);
-  for(int i = 0; i < imax; i++){
-    fprintf(in, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4e\n", i, x[i], y[i], z[i], q[i]);
-  }
-}
-/* end of file output utilities */
-/*********************** */
-
-/* a utility to get file length */
-int get_line_number(FILE *f){
-	char line[1000];
-	int i = 0;
-	while(NULL != fgets(line, 1000, f)){
-		if(line[0] == '#')continue;
-		i++;
-	}
-	return(i);
-}
-
-/******************/
-/* WIND DATA INPUT*/
-/*
- * NOTE (refactor candidate):
- * get_wind_line_number() and read_wind() share almost identical
- * parsing logic and should ideally be unified.
- *
- * Current design reads the file twice:
- *   1) count number of lines
- *   2) read data into arrays
- *
- * Future improvement:
- * - merge parsing into a single pass
- * - dynamically allocate or resize arrays
- * - avoid duplicated sscanf logic
- */
-
-/*
- * Count number of wind data points to be stored.
- *
- * This function reads the wind input file and counts valid data lines.
- * If the first data height is above 0 m, one additional surface-level
- * data point is assumed and added to the count.
- *
- * Note:
- * This parsing logic must remain consistent with read_wind().
- */
-int get_wind_line_number(FILE *f){
-	char line[1000];
-	int i = 0;
-	int additional = 1;
-	int ret;
-	double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
-	while(NULL != fgets(line, 1000, f)){
-		if(line[0] == '#')continue;
-		else{
-		while(ret=sscanf(line,
-		"%lf %lf %lf %lf %lf",
-		&wind_height,
-		&wind_speed,
-		&wind_dir,
-		&wind_temp,
-		&wind_pres), ret != 5){}
-		}
-		if(wind_height == 0 && i==0){
-			additional = 0;
-		}
-		//printf("wind_height\t%1.1f\n", height[i]);
-		i++;
-	}
-	return(i + additional);
-}
-
-/*
- * Read wind and atmospheric data from input file.
- *
- * The file is expected to contain:
- *   height, wind speed, wind direction, temperature, pressure
- *
- * If the first data height is above 0 m, a synthetic surface-level
- * data point is inserted at height = 0 m.
- *
- * Note:
- * This parsing logic must remain consistent with get_wind_line_number().
- */
-void read_wind(FILE *f, double *height, double *speed, double *dir, double *atm_temp, double *atm_pres){
-	char line[1000];
-	int i = 0;
-	int ret;
-	double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
-	while(NULL != fgets(line, 1000, f)){
-		if(line[0] == '#')continue;
-		else{
-		while(ret=sscanf(line,
-		"%lf %lf %lf %lf %lf",
-		&wind_height,
-		&wind_speed,
-		&wind_dir,
-		&wind_temp,
-		&wind_pres), ret != 5){}
-		}
-		if(wind_height == 0 && i==0){
-			height[i] = wind_height;
-			speed[i] = wind_speed;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp;
-			atm_pres[i] = wind_pres;
-		}else if(wind_height > 0 && i==0){
-			height[i] = 0;
-			speed[i] = 0;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp + 0.0065 * wind_height;
-			atm_pres[i] = wind_pres + 0.12 * wind_height;
-			i++;
-			height[i] = wind_height;
-			speed[i] = wind_speed;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp;
-			atm_pres[i] = wind_pres;
-		}else{
-			height[i] = wind_height;
-			speed[i] = wind_speed;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp;
-			atm_pres[i] = wind_pres;
-		}
-		//printf("wind_height\t%1.1f\n", height[i]);
-		i++;
-	}
-}
-
-/*
- * Read location coordinates and convert them to a vent-centered coordinate system.
- *
- * Input coordinates are given in map coordinates. This function converts them
- * to a vent-centered system (vent = 0):
- *   x = X_map - VENT_EASTING
- *   y = Y_map - VENT_NORTHING
- *
- * For each location:
- * - coordinates are stored relative to the vent
- * - negative elevation is clipped to z = 0
- * - map boundaries (MAPENDW/E/S/N) are updated
- *
- * Note:
- * The entire simulation uses a vent-centered coordinate system.
- */
-void read_locations_and_convert_to_vent_centered(FILE *f, double *x, double *y, double *z){
-	char line[1000];
-	int i = 0;
-	double xtmp, ytmp, ztmp;
-	int ret;
-	//double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
-	while(NULL != fgets(line, 1000, f)){
-		if(line[0] == '#')continue;
-		else{
-		while(ret=sscanf(line,
-		"%lf %lf %lf",
-		&xtmp,
-		&ytmp,
-		&ztmp), ret != 3){}
-		}
-		x[i] = xtmp - VENT_EASTING; y[i] = ytmp - VENT_NORTHING; 
-		if(ztmp < 0){z[i] = 0;}else{z[i] = ztmp;}
-		if(xtmp-VENT_EASTING < MAPENDW){MAPENDW = xtmp-VENT_EASTING;}	//20241224
-		if(xtmp-VENT_EASTING > MAPENDE){MAPENDE = xtmp-VENT_EASTING;}
-		if(ytmp-VENT_NORTHING < MAPENDS){MAPENDS = ytmp-VENT_NORTHING;}
-		if(ytmp-VENT_NORTHING > MAPENDN){MAPENDN = ytmp-VENT_NORTHING;}
-		i++;
-	}
-	printf("MAP BOUNDARY W %1.0f\tE %1.0f\tS %1.0f\tN %1.0f\n", MAPENDW, MAPENDE, MAPENDS, MAPENDN);
-}
-
-/*
  * Perform isopach analysis on deposit data.
+ *
+ * [6.2.]
  *
  * This function:
  * - sorts locations by total mass loading (descending)
@@ -4155,39 +3826,7 @@ void createisopachdata(DEP *l){
 	//countmeandiameter(l);
 }
 
-/*
- * Comparison function for sorting DEP by total mass loading.
- *
- * Sort order:
- *   descending (largest ttlmassloading first)
- *
- * Used with qsort() in isopach analysis.
- */
-int compare_ttlmassloading(const void *a, const void *b){
-    double z1 = ((DEP *)a)->ttlmassloading;
-    double z2 = ((DEP *)b)->ttlmassloading;
-
-    if (z1 < z2) return 1;
-    if (z1 > z2) return -1;
-    return 0;
-}
-
-/*
- * Comparison function for sorting DEP by mean grain size (phi).
- *
- * Sort order:
- *   ascending (smaller phi first)
- */
-int compare_Md(const void *a, const void *b){
-    double z1 = ((DEP *)a)->meandiameter;
-    double z2 = ((DEP *)b)->meandiameter;
-
-    if (z1 > z2) return 1;
-    if (z1 < z2) return -1;
-    return 0;
-}
-
-/*
+/* [6.2.1.]
  * Generate isopach analysis from deposition results.
  *
  * Prerequisite:
@@ -4435,6 +4074,552 @@ void generate_isopach_analysis(DEP *l){
   fclose(outfile);
 }
 
+/////////////////////[END OF THE PART 06]/////////////////////
+
+
+/////////////////////////////////[PART 07]///////////////////////////////// 
+//
+//
+// ==============================
+// [7] Output
+// ==============================q
+// Particle deposit on the ground
+// [7.1.2.] write_deposit_summary					// massloading.txt
+// [7.1.4.] write_total_massloading
+// [7.1.5.] write_massloading_loc_source_phi
+// [7.1.6.] write_massloading_per_phidec_at_locations
+
+// Particle release and diffusion
+// [7.2.1.] write_vertical_profiles_for_phi
+// [7.2.2.] write_particle_release_theoretical_vs_actual
+// [7.2.3.] write_massrelease_per_source_phi
+// [7.2.4.] write_plume_files						// plumetraj.txt and plumesourceposition.txt
+
+
+
+/*
+ * Write final deposit results at all locations to file.
+ *
+ * [7.1.2.]
+ *
+ * Output file:
+ *   massloading.txt
+ *
+ * Each row corresponds to one location j and contains:
+ * - coordinates (x, y, z) [m]
+ * - distance from vent [m]
+ * - total mass loading [kg/m^2]
+ * - fraction of particles smaller than 1 mm [%]
+ * - mean grain size (phi)
+ * - mass loading for each integer phi class
+ *
+ * Notes:
+ * - Coordinates are shifted by vent position (VENT_EASTING/NORTHING).
+ * - Phi classes are written from coarse to fine.
+ */
+void write_deposit_summary(DEP *location_properties){
+	FILE *outfile;
+	outfile = fopen("massloading.txt", "w");
+
+	/*write header*/
+	fprintf(outfile, "x(m)\ty(m)\tz(m)\tdistfromvent(m)");
+	fprintf(outfile, "\tttlmassloading(kg/sq-m)\tF(percent)\tMean(phi)");
+	for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
+		fprintf(outfile, "\t%1.0fphi", MAX_GRAINSIZE + phiint + 1);
+	}
+	fprintf(outfile, "\n");
+
+	/*write data*/
+	for(int j = 0; j < LOCDIM; j++){
+		fprintf(outfile, "%1.0f\t%1.0f\t%1.0f\t%1.1f", location_properties[j].x + VENT_EASTING, location_properties[j].y + VENT_NORTHING, location_properties[j].z, location_properties[j].dist);
+		double fraction = 0.0;
+		if(location_properties[j].ttlmassloading > 0){
+			fraction = location_properties[j].smallerthan1mm /
+					location_properties[j].ttlmassloading * 100.0;
+}
+		fprintf(outfile, "\t%1.4e\t%1.4f\t%1.4f", location_properties[j].ttlmassloading, fraction, location_properties[j].meandiameter);
+		for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
+			fprintf(outfile, "\t%1.4e", location_properties[j].dep[phiint]);
+		}
+		fprintf(outfile, "\n");
+	}
+	fclose(outfile);
+}
+
+
+/* [7.1.4.]
+ * Debug utility:
+ * Write total mass loading per location for the current phi class.
+ * (Not used in normal work flow)
+ */
+void write_total_massloading(int phiint, double *ttlml){
+	int phi;
+	char string[20];
+	FILE *outfile;
+	
+	phi = phiint + MAX_GRAINSIZE + 1; 
+	sprintf(string, "ttlml%d.txt", phi);
+	outfile = fopen(string, "w");
+
+	fprintf(outfile, "j\tttlml\n");
+	for(int j = 0; j < LOCDIM; j++){
+		fprintf(outfile, "%d\t%1.4e\n", j, ttlml[j]);
+	}
+	fclose(outfile);
+}
+
+/* [7.1.5.]
+ * Write mass loading contribution for each (location, source, phidec).
+ *
+ * This debug/output file shows how much each source point and decimal phi
+ * class contributes to mass loading at each ground location.
+ */
+void write_massloading_loc_source_phi(int phiint, double *massloading_loc_source_phi){
+	int j, s, phidec, phi;
+	char string[64];
+	FILE *outfile;
+	
+	phi = phiint + MAX_GRAINSIZE + 1; 
+	sprintf(string, "massloading_loc_source_phi%d.txt", phi);
+	outfile = fopen(string, "w");
+
+	fprintf(outfile, "j\ts\tphi\tphidec\tmassloading_loc_source_phi\n");
+	for(int i = 0; i < LOCDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; i++){
+		phidec = i % PHIDECDIM;
+		s = (i / PHIDECDIM) % SDIM_FOR_FALL_CALC;
+		j = i / (PHIDECDIM * SDIM_FOR_FALL_CALC);
+		fprintf(outfile, "%d\t%d\t%1.1f\t%d\t%1.4e\n", j, s, phi - phidec * 0.1, phidec, massloading_loc_source_phi[i]);
+	}
+	fclose(outfile);
+}
+
+/* [7.1.6.]
+ * Write mass loading at each location for decimal phi classes.
+ *
+ * For the current integer phi interval, this function sums
+ * massloading_loc_source_phi over all source points s and outputs
+ * mass loading for each decimal phi bin (phidec) at each ground location.
+ *
+ * Input:
+ * - location_properties[j]      : properties of ground location j
+ * - massloading_loc_source_phi  : mass loading indexed by (location, source, phidec)
+ *
+ * Output:
+ * - S_decimalphi_#.txt
+ */
+void write_massloading_per_phidec_at_locations(
+    DEP *location_properties,
+    int phiint,
+    double *massloading_loc_source_phi
+){
+    int idx;
+    int phi;
+    char string[64];
+    FILE *outfile;
+
+    phi = phiint + MAX_GRAINSIZE + 1;
+
+    sprintf(string, "S_decimalphi_%d.txt", phi);
+    outfile = fopen(string, "w");
+
+    fprintf(outfile, "X\tY\tZ");
+    for(int phidec = 0; phidec < PHIDECDIM; phidec++){
+        fprintf(outfile, "\t%1.1f", phi - phidec * INTERVAL_DECIMAL_PHI);
+    }
+    fprintf(outfile, "\n");
+
+    for(int j = 0; j < LOCDIM; j++){
+        double massloading_each_phidec[PHIDECDIM];
+
+        for(int phidec = 0; phidec < PHIDECDIM; phidec++){
+            massloading_each_phidec[phidec] = 0.0;
+        }
+
+        for(int s = 0; s < SDIMCUTOFF; s++){
+            for(int phidec = 0; phidec < PHIDECDIM; phidec++){
+                idx = ((j * SDIMCUTOFF) + s) * PHIDECDIM + phidec;
+                massloading_each_phidec[phidec] += massloading_loc_source_phi[idx];
+            }
+        }
+
+        fprintf(outfile, "%1.1f\t%1.1f\t%1.1f",
+                location_properties[j].x + VENT_EASTING,
+                location_properties[j].y + VENT_NORTHING,
+                location_properties[j].z);
+
+        for(int phidec = 0; phidec < PHIDECDIM; phidec++){
+            fprintf(outfile, "\t%1.4e", massloading_each_phidec[phidec]);
+        }
+        fprintf(outfile, "\n");
+    }
+
+    fclose(outfile);
+}
+
+/*
+ * Write vertical profiles indexed by (phi, z).
+ *
+ * [7.2.1.]
+ *
+ * Outputs a table where:
+ * - rows correspond to height index z
+ * - columns correspond to phi classes
+ *
+ * Data layout:
+ *   profile_by_phi[z + phi * ZDIM]
+ *
+ * Used for fall time, drift, and other height-dependent quantities.
+ */
+void write_vertical_profiles_for_phi(
+    const char *filename,
+    double *h,
+    double *profile_by_phi,
+    double base,
+    int stepnum,
+    double stepdelta
+){
+    FILE *outfile = fopen(filename, "w");
+
+    // write header
+    fprintf(outfile, "z\th(m)");
+    for(int phiint = 0; phiint < stepnum; phiint++){
+        fprintf(outfile, "\tphi%1.1f", base - phiint * stepdelta);
+    }
+    fprintf(outfile, "\n");
+
+    // write data (top → bottom)
+    for(int z = ZDIM - 1; z >= 0; z--){
+        fprintf(outfile, "%d\t%1.1f", z, h[z]);
+        for(int phiint = 0; phiint < stepnum; phiint++){
+            fprintf(outfile, "\t%1.4f", profile_by_phi[z + phiint * ZDIM]);
+        }
+        fprintf(outfile, "\n");
+    }
+
+    fclose(outfile);
+}
+
+/* [7.2.2]
+ * Due to the upper limit of SDIM, particles that would fall beyond
+ * the maximum source distance are not included in the calculation.
+ *
+ * This effect is more significant for fine particles, which travel farther.
+ * As a result, the actual released mass can be smaller than the
+ * prescribed (theoretical) release amount.
+ */
+void write_particle_release_theoretical_vs_actual(RELEASE *r){
+	FILE *outfile;
+
+	outfile = fopen("particle_release_theoretical_vs_actual.txt", "w");
+	fprintf(outfile, "#i\tFraction(phi)\tTheoretical(kg)\tWtPercent\tActual(kg)\tActual/Theoretical\n");
+
+	for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
+		fprintf(outfile, "%d\t%1.1f\t%1.4e\t%1.4f\t%1.4e\t%1.4f\n", phiint, r[phiint].phi, r[phiint].theoretical, r[phiint].theoretical/ERUPTION_MASS*100, r[phiint].actual, r[phiint].actual/r[phiint].theoretical);
+	}
+
+	fclose(outfile);
+}
+
+// [7.2.3.]
+/* Write mass release per source point for each integer phi class */
+void write_massrelease_per_source_phi(SEG *r){
+	FILE *outfile;
+
+	outfile = fopen("particle_released_per_ds.txt", "w");
+	
+	fprintf(outfile, "#source");
+	for(int i = 0; i < MIN_GRAINSIZE - MAX_GRAINSIZE; i++){
+		fprintf(outfile, "\t%1.0f", i + MAX_GRAINSIZE + 1);
+	}
+	fprintf(outfile, "\n");
+	
+	for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
+		fprintf(outfile, "%d", s);
+		for(int phiint = 0; phiint < MIN_GRAINSIZE - MAX_GRAINSIZE; phiint++){
+			fprintf(outfile, "\t%1.4e", r[s].mass_from_ds[phiint]);
+		}
+		fprintf(outfile, "\n");
+	}
+
+	fclose(outfile);
+}
+
+/*
+ * Write plume trajectory and particle source positions to files.
+ *
+ * [7.2.4.]
+ *
+ * plumetraj.txt:
+ *   Centerline of the plume obtained by solving the plume differential equations.
+ *   Each entry corresponds to a point along the plume axis.
+ *
+ * plumesourceposition.txt:
+ *   Discrete particle release points distributed along the plume axis.
+ *   These serve as sources of particle emission for the fall calculation.
+ */
+void write_plume_files(
+    int WRITE_COLUMN_FILES,
+    int SDIM_FOR_PLUME_CALC,
+    int SDIM_FOR_FALL_CALC,
+    double *plume_trajX,
+    double *plume_trajY,
+    double *plume_trajZ,
+    double *plume_trajR,
+    double *plume_trajT,
+    double *sourceX,
+    double *sourceY,
+    double *sourceZ,
+    double *sourceRadius,
+    double *sourceT
+){
+    if(WRITE_COLUMN_FILES){
+        FILE *outfile = fopen("plumetraj.txt", "w");
+        const char *header = "calc_step\tx\ty\tz\tR\ttime\n";
+        printxyzq(outfile, header, SDIM_FOR_PLUME_CALC,
+                  plume_trajX, plume_trajY, plume_trajZ,
+                  plume_trajR, plume_trajT);
+        fclose(outfile);
+    }
+
+    if(WRITE_COLUMN_FILES){
+        FILE *outfile = fopen("plumesourceposition.txt", "w");
+        const char *header = "source\tx\ty\tz\tR\ttime\n";
+        printxyzq(outfile, header, SDIM_FOR_FALL_CALC,
+                  sourceX, sourceY, sourceZ,
+                  sourceRadius, sourceT);
+        fclose(outfile);
+    }
+}
+/////////////////////[END OF THE PART 07]/////////////////////
+
+
+/*********************** */
+/* file output utilities */
+/* 1. x, y, z */
+void printxyz(FILE *in, const char *header, int imax, double *sourceX, double *sourceY, double *sourceZ){
+  fprintf(in, "%s", header);
+  for(int i = 0; i < imax; i++){
+    fprintf(in, "%d\t%1.4f\t%1.4f\t%1.4f\n", i, sourceX[i], sourceY[i], sourceZ[i]);
+  }
+}
+
+/* 2. x, y, z, q */
+void printxyzq(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q, double *t){
+  fprintf(in, "%s", header);
+  for(int i = 0; i < imax; i++){
+    fprintf(in, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\n", i, x[i], y[i], z[i], q[i], t[i]);
+  }
+}
+
+/* 3. x, y, z, *exp */
+void printxyze(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q){
+  fprintf(in, "%s", header);
+  for(int i = 0; i < imax; i++){
+    fprintf(in, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4e\n", i, x[i], y[i], z[i], q[i]);
+  }
+}
+/* end of file output utilities */
+/*********************** */
+
+/* a utility to get file length */
+int get_line_number(FILE *f){
+	char line[1000];
+	int i = 0;
+	while(NULL != fgets(line, 1000, f)){
+		if(line[0] == '#')continue;
+		i++;
+	}
+	return(i);
+}
+
+/******************/
+/* WIND DATA INPUT*/
+/*
+ * NOTE (refactor candidate):
+ * get_wind_line_number() and read_wind() share almost identical
+ * parsing logic and should ideally be unified.
+ *
+ * Current design reads the file twice:
+ *   1) count number of lines
+ *   2) read data into arrays
+ *
+ * Future improvement:
+ * - merge parsing into a single pass
+ * - dynamically allocate or resize arrays
+ * - avoid duplicated sscanf logic
+ */
+
+/*
+ * Count number of wind data points to be stored.
+ *
+ * This function reads the wind input file and counts valid data lines.
+ * If the first data height is above 0 m, one additional surface-level
+ * data point is assumed and added to the count.
+ *
+ * Note:
+ * This parsing logic must remain consistent with read_wind().
+ */
+int get_wind_line_number(FILE *f){
+	char line[1000];
+	int i = 0;
+	int additional = 1;
+	int ret;
+	double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
+	while(NULL != fgets(line, 1000, f)){
+		if(line[0] == '#')continue;
+		else{
+		while(ret=sscanf(line,
+		"%lf %lf %lf %lf %lf",
+		&wind_height,
+		&wind_speed,
+		&wind_dir,
+		&wind_temp,
+		&wind_pres), ret != 5){}
+		}
+		if(wind_height == 0 && i==0){
+			additional = 0;
+		}
+		//printf("wind_height\t%1.1f\n", height[i]);
+		i++;
+	}
+	return(i + additional);
+}
+
+/*
+ * Read wind and atmospheric data from input file.
+ *
+ * The file is expected to contain:
+ *   height, wind speed, wind direction, temperature, pressure
+ *
+ * If the first data height is above 0 m, a synthetic surface-level
+ * data point is inserted at height = 0 m.
+ *
+ * Note:
+ * This parsing logic must remain consistent with get_wind_line_number().
+ */
+void read_wind(FILE *f, double *height, double *speed, double *dir, double *atm_temp, double *atm_pres){
+	char line[1000];
+	int i = 0;
+	int ret;
+	double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
+	while(NULL != fgets(line, 1000, f)){
+		if(line[0] == '#')continue;
+		else{
+		while(ret=sscanf(line,
+		"%lf %lf %lf %lf %lf",
+		&wind_height,
+		&wind_speed,
+		&wind_dir,
+		&wind_temp,
+		&wind_pres), ret != 5){}
+		}
+		if(wind_height == 0 && i==0){
+			height[i] = wind_height;
+			speed[i] = wind_speed;
+			dir[i] = wind_dir;
+			atm_temp[i] = wind_temp;
+			atm_pres[i] = wind_pres;
+		}else if(wind_height > 0 && i==0){
+			height[i] = 0;
+			speed[i] = 0;
+			dir[i] = wind_dir;
+			atm_temp[i] = wind_temp + 0.0065 * wind_height;
+			atm_pres[i] = wind_pres + 0.12 * wind_height;
+			i++;
+			height[i] = wind_height;
+			speed[i] = wind_speed;
+			dir[i] = wind_dir;
+			atm_temp[i] = wind_temp;
+			atm_pres[i] = wind_pres;
+		}else{
+			height[i] = wind_height;
+			speed[i] = wind_speed;
+			dir[i] = wind_dir;
+			atm_temp[i] = wind_temp;
+			atm_pres[i] = wind_pres;
+		}
+		//printf("wind_height\t%1.1f\n", height[i]);
+		i++;
+	}
+}
+
+/*
+ * Read location coordinates and convert them to a vent-centered coordinate system.
+ *
+ * Input coordinates are given in map coordinates. This function converts them
+ * to a vent-centered system (vent = 0):
+ *   x = X_map - VENT_EASTING
+ *   y = Y_map - VENT_NORTHING
+ *
+ * For each location:
+ * - coordinates are stored relative to the vent
+ * - negative elevation is clipped to z = 0
+ * - map boundaries (MAPENDW/E/S/N) are updated
+ *
+ * Note:
+ * The entire simulation uses a vent-centered coordinate system.
+ */
+void read_locations_and_convert_to_vent_centered(FILE *f, double *x, double *y, double *z){
+	char line[1000];
+	int i = 0;
+	double xtmp, ytmp, ztmp;
+	int ret;
+	//double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
+	while(NULL != fgets(line, 1000, f)){
+		if(line[0] == '#')continue;
+		else{
+		while(ret=sscanf(line,
+		"%lf %lf %lf",
+		&xtmp,
+		&ytmp,
+		&ztmp), ret != 3){}
+		}
+		x[i] = xtmp - VENT_EASTING; y[i] = ytmp - VENT_NORTHING; 
+		if(ztmp < 0){z[i] = 0;}else{z[i] = ztmp;}
+		if(xtmp-VENT_EASTING < MAPENDW){MAPENDW = xtmp-VENT_EASTING;}	//20241224
+		if(xtmp-VENT_EASTING > MAPENDE){MAPENDE = xtmp-VENT_EASTING;}
+		if(ytmp-VENT_NORTHING < MAPENDS){MAPENDS = ytmp-VENT_NORTHING;}
+		if(ytmp-VENT_NORTHING > MAPENDN){MAPENDN = ytmp-VENT_NORTHING;}
+		i++;
+	}
+	printf("MAP BOUNDARY W %1.0f\tE %1.0f\tS %1.0f\tN %1.0f\n", MAPENDW, MAPENDE, MAPENDS, MAPENDN);
+}
+
+
+
+/*
+ * Comparison function for sorting DEP by total mass loading.
+ *
+ * Sort order:
+ *   descending (largest ttlmassloading first)
+ *
+ * Used with qsort() in isopach analysis.
+ */
+int compare_ttlmassloading(const void *a, const void *b){
+    double z1 = ((DEP *)a)->ttlmassloading;
+    double z2 = ((DEP *)b)->ttlmassloading;
+
+    if (z1 < z2) return 1;
+    if (z1 > z2) return -1;
+    return 0;
+}
+
+/*
+ * Comparison function for sorting DEP by mean grain size (phi).
+ *
+ * Sort order:
+ *   ascending (smaller phi first)
+ */
+int compare_Md(const void *a, const void *b){
+    double z1 = ((DEP *)a)->meandiameter;
+    double z2 = ((DEP *)b)->meandiameter;
+
+    if (z1 > z2) return 1;
+    if (z1 < z2) return -1;
+    return 0;
+}
+
+
 /*
  * Compute area–mean grain size relationship of deposits.
  *
@@ -4540,51 +4725,6 @@ void compute_theoretical_particle_release(RELEASE *r){
 	}
 }
 
-
-/* [7.1.2]
- * Due to the upper limit of SDIM, particles that would fall beyond
- * the maximum source distance are not included in the calculation.
- *
- * This effect is more significant for fine particles, which travel farther.
- * As a result, the actual released mass can be smaller than the
- * prescribed (theoretical) release amount.
- */
-void write_particle_release_theoretical_vs_actual(RELEASE *r){
-	FILE *outfile;
-
-	outfile = fopen("particle_release_theoretical_vs_actual.txt", "w");
-	fprintf(outfile, "#i\tFraction(phi)\tTheoretical(kg)\tWtPercent\tActual(kg)\tActual/Theoretical\n");
-
-	for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
-		fprintf(outfile, "%d\t%1.1f\t%1.4e\t%1.4f\t%1.4e\t%1.4f\n", phiint, r[phiint].phi, r[phiint].theoretical, r[phiint].theoretical/ERUPTION_MASS*100, r[phiint].actual, r[phiint].actual/r[phiint].theoretical);
-	}
-
-	fclose(outfile);
-}
-
-// [7.1.3.]
-/* Write mass release per source point for each integer phi class */
-void write_massrelease_per_source_phi(SEG *r){
-	FILE *outfile;
-
-	outfile = fopen("particle_released_per_ds.txt", "w");
-	
-	fprintf(outfile, "#source");
-	for(int i = 0; i < MIN_GRAINSIZE - MAX_GRAINSIZE; i++){
-		fprintf(outfile, "\t%1.0f", i + MAX_GRAINSIZE + 1);
-	}
-	fprintf(outfile, "\n");
-	
-	for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
-		fprintf(outfile, "%d", s);
-		for(int phiint = 0; phiint < MIN_GRAINSIZE - MAX_GRAINSIZE; phiint++){
-			fprintf(outfile, "\t%1.4e", r[s].mass_from_ds[phiint]);
-		}
-		fprintf(outfile, "\n");
-	}
-
-	fclose(outfile);
-}
 
 /* Compute particle terminal fall velocity based on Reynolds-number-dependent drag regimes */
 double calc_particle_terminal_velocity(double h, double ashdiam, double part_density, double p, double t) {
@@ -4849,114 +4989,4 @@ void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double 
 			if(WRITE_DEPCENT_TRAJECTORY) fprintf(outfile, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4e\n", i, cloud_center_x[idz], cloud_center_y[idz], cloud_center_x[idz] + VENT_EASTING, cloud_center_y[idz] + VENT_NORTHING, cloud_sigma2[idz], released);
 		}
 		if(WRITE_DEPCENT_TRAJECTORY) fclose(outfile);
-}
-
-
-/*
- * Debug utility:
- * Write total mass loading per location for the current phi class.
- * (Not used in normal work flow)
- */
-void write_total_massloading(int phiint, double *ttlml){
-	int phi;
-	char string[20];
-	FILE *outfile;
-	
-	phi = phiint + MAX_GRAINSIZE + 1; 
-	sprintf(string, "ttlml%d.txt", phi);
-	outfile = fopen(string, "w");
-
-	fprintf(outfile, "j\tttlml\n");
-	for(int j = 0; j < LOCDIM; j++){
-		fprintf(outfile, "%d\t%1.4e\n", j, ttlml[j]);
-	}
-	fclose(outfile);
-}
-
-/*
- * Write mass loading contribution for each (location, source, phidec).
- *
- * This debug/output file shows how much each source point and decimal phi
- * class contributes to mass loading at each ground location.
- */
-void write_massloading_loc_source_phi(int phiint, double *massloading_loc_source_phi){
-	int j, s, phidec, phi;
-	char string[64];
-	FILE *outfile;
-	
-	phi = phiint + MAX_GRAINSIZE + 1; 
-	sprintf(string, "massloading_loc_source_phi%d.txt", phi);
-	outfile = fopen(string, "w");
-
-	fprintf(outfile, "j\ts\tphi\tphidec\tmassloading_loc_source_phi\n");
-	for(int i = 0; i < LOCDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; i++){
-		phidec = i % PHIDECDIM;
-		s = (i / PHIDECDIM) % SDIM_FOR_FALL_CALC;
-		j = i / (PHIDECDIM * SDIM_FOR_FALL_CALC);
-		fprintf(outfile, "%d\t%d\t%1.1f\t%d\t%1.4e\n", j, s, phi - phidec * 0.1, phidec, massloading_loc_source_phi[i]);
-	}
-	fclose(outfile);
-}
-
-/*
- * Write mass loading at each location for decimal phi classes.
- *
- * For the current integer phi interval, this function sums
- * massloading_loc_source_phi over all source points s and outputs
- * mass loading for each decimal phi bin (phidec) at each ground location.
- *
- * Input:
- * - location_properties[j]      : properties of ground location j
- * - massloading_loc_source_phi  : mass loading indexed by (location, source, phidec)
- *
- * Output:
- * - S_decimalphi_#.txt
- */
-void write_massloading_per_phidec_at_locations(
-    DEP *location_properties,
-    int phiint,
-    double *massloading_loc_source_phi
-){
-    int idx;
-    int phi;
-    char string[64];
-    FILE *outfile;
-
-    phi = phiint + MAX_GRAINSIZE + 1;
-
-    sprintf(string, "S_decimalphi_%d.txt", phi);
-    outfile = fopen(string, "w");
-
-    fprintf(outfile, "X\tY\tZ");
-    for(int phidec = 0; phidec < PHIDECDIM; phidec++){
-        fprintf(outfile, "\t%1.1f", phi - phidec * INTERVAL_DECIMAL_PHI);
-    }
-    fprintf(outfile, "\n");
-
-    for(int j = 0; j < LOCDIM; j++){
-        double massloading_each_phidec[PHIDECDIM];
-
-        for(int phidec = 0; phidec < PHIDECDIM; phidec++){
-            massloading_each_phidec[phidec] = 0.0;
-        }
-
-        for(int s = 0; s < SDIMCUTOFF; s++){
-            for(int phidec = 0; phidec < PHIDECDIM; phidec++){
-                idx = ((j * SDIMCUTOFF) + s) * PHIDECDIM + phidec;
-                massloading_each_phidec[phidec] += massloading_loc_source_phi[idx];
-            }
-        }
-
-        fprintf(outfile, "%1.1f\t%1.1f\t%1.1f",
-                location_properties[j].x + VENT_EASTING,
-                location_properties[j].y + VENT_NORTHING,
-                location_properties[j].z);
-
-        for(int phidec = 0; phidec < PHIDECDIM; phidec++){
-            fprintf(outfile, "\t%1.4e", massloading_each_phidec[phidec]);
-        }
-        fprintf(outfile, "\n");
-    }
-
-    fclose(outfile);
 }

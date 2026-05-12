@@ -2110,6 +2110,153 @@ void interpolate_atmosphere_and_wind(int windlinenum, double *h, double *atmT, d
 	if(WRITE_COLUMN_FILES){fclose(outfile);}
 }
 
+/* [4.1.1.1.]
+ * Interpolate atmospheric temperature at height h
+ * from discrete atmospheric data.
+ *
+ * Linear interpolation is used between adjacent height levels.
+ * If h is above the highest level, the temperature at the highest
+ * level is returned.
+ */
+double calc_Tatm(double h, int total){
+	int i=1;
+	double t_atm = W1[total-1].t_atm;
+
+	while(i<total){
+		if(h < W1[i].wind_height){
+			t_atm = W1[i-1].t_atm + (W1[i].t_atm - W1[i-1].t_atm) * (h - W1[i-1].wind_height) / (W1[i].wind_height - W1[i-1].wind_height);
+			break;
+		}
+		i++;
+	}
+	//printf("%d\t%1.4f\t%1.4f\n", i, h, v);
+	return t_atm;
+}
+
+/* [4.1.1.2]
+ * Estimate atmospheric pressure at height h from discrete atmospheric data.
+ *
+ * Temperature is linearly interpolated between input height levels.
+ * Pressure is then estimated from the pressure at the lower level
+ * using a hydrostatic approximation with the mean temperature
+ * between the lower level and height h.
+ *
+ * Input pressure is assumed to be in hPa and converted to Pa.
+ */
+double calc_Patm(double h, int total){
+	int i=1;
+	double p_atm;
+	double a;
+
+	double t_atm = W1[total-1].t_atm;
+	double t_atm0 = W1[total-1].t_atm;
+	double p_atm0 = W1[total-1].p_atm;
+
+	while(i<total){
+		if(h < W1[i].wind_height){
+			t_atm = W1[i-1].t_atm + (W1[i].t_atm - W1[i-1].t_atm) * (h - W1[i-1].wind_height) / (W1[i].wind_height - W1[i-1].wind_height);
+			t_atm0 = W1[i-1].t_atm;
+			p_atm0 = W1[i-1].p_atm;
+			break;
+		}
+		i++;
+	}
+
+	a = (h - W1[i-1].wind_height) * GRAVITY * 2 / (Ra * (t_atm + t_atm0));
+	p_atm = p_atm0 / exp(a) * 100; // hPa -> Pa
+	//printf("h = %1.4f\ta_0 = %1.4f\tta_0 = %1.4f\tta_1 = %1.4f\te = %1.4f\tp = %1.4f\tp0 = %1.4f\n", z, a, t_atm0, t_atm, exp(a), p_atm, p_atm0);
+	return p_atm;
+}
+
+/* [4.1.1.3.]
+ * Compute air density using the ideal gas law.
+ * (Equation 23 in Woodhouse et al.)
+ *
+ *   rho = p / (R * T)
+ */
+double compute_air_density(double p_tmp, double t_tmp){	// atmospheric density
+	double rho_tmp;
+
+	rho_tmp = p_tmp / (Ra * t_tmp);
+	return rho_tmp;
+}
+
+/* [4.1.1.4.]
+ * Compute vertical pressure gradient under hydrostatic balance.
+ * (Equation 22 in Woodhouse et al.)
+ *
+ *   dp/ds = - (g * p) / (R * T)
+ */
+double compute_pressure_gradient(double p_tmp, double t_tmp){	// atmospheric pressure
+	double dp_over_ds;
+
+	dp_over_ds = -1 * (GRAVITY * p_tmp) / (Ra * t_tmp);
+	return dp_over_ds;
+}
+
+/* [4.1.1.5.]
+ * Interpolate wind speed at height h from discrete wind data.
+ *
+ * If h is above the highest wind-data level, the wind speed at the
+ * highest level is returned.
+ */
+double interpolate_wind_speed(double h, int total){	//return wind velocity based on discrete wind data
+	int i=1;
+	double v;
+
+	v=W1[total-1].wind_speed;
+
+	while(i<total){
+		if(h < W1[i].wind_height){
+			v = W1[i-1].wind_speed + (W1[i].wind_speed - W1[i-1].wind_speed)*(h - W1[i-1].wind_height) / (W1[i].wind_height - W1[i-1].wind_height);
+			break;
+		}
+		i++;
+	}
+	//printf("%d\t%1.4f\t%1.4f\n", i, h, v);
+	return v;
+}
+
+/* [4.1.1.6.]
+ * Interpolate wind direction at height h from discrete wind data.
+ *
+ * Wind direction is circular data, so this function handles wrap-around
+ * across 0/360 degrees before linear interpolation.
+ *
+ * If h is above the highest wind-data level, the wind direction at the
+ * highest level is returned.
+ */
+double interpolate_wind_direction_across_360(double h, int total){	//return wind direction based on discrete wind data
+	int i=1;
+	double dir;
+	double ratio, wind1, wind2;
+
+	dir=W1[total-1].wind_dir;
+
+	while(i<total){
+		wind1 = W1[i-1].wind_dir;
+		wind2 = W1[i].wind_dir;
+		//printf("h = %1.4f\t, w = %1.4f\n", h, W1[i].wind_height);
+		if(h < W1[i].wind_height){
+			ratio = (h - W1[i-1].wind_height) / (W1[i].wind_height - W1[i-1].wind_height);
+			if(wind2 - wind1 > 180){
+				wind1 = wind1 + 360;
+			}else if(wind1 - wind2 > 180){
+				wind2 = wind2 + 360;
+			}
+
+			dir = ratio * (wind2 - wind1) + wind1;
+
+			if(dir>360){dir=dir-360;}
+			if(dir<0){dir=dir+360;}
+
+			break;
+		}
+		i++;
+	}
+	//printf("dir\t%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\n", i, z, ratio, dir, wind1, wind2);
+	return dir;
+}
 /////////////////////[END OF THE PART 04]/////////////////////
 
 /////////////////////////////////[PART 05]///////////////////////////////// 
@@ -4084,10 +4231,10 @@ void generate_isopach_analysis(DEP *l){
 // [7] Output
 // ==============================q
 // Particle deposit on the ground
-// [7.1.2.] write_deposit_summary					// massloading.txt
-// [7.1.4.] write_total_massloading
-// [7.1.5.] write_massloading_loc_source_phi
-// [7.1.6.] write_massloading_per_phidec_at_locations
+// [7.1.1.] write_deposit_summary					// massloading.txt
+// [7.1.2.] write_total_massloading	// debug use
+// [7.1.3.] write_massloading_loc_source_phi
+// [7.1.4.] write_massloading_per_phidec_at_locations
 
 // Particle release and diffusion
 // [7.2.1.] write_vertical_profiles_for_phi
@@ -4095,12 +4242,10 @@ void generate_isopach_analysis(DEP *l){
 // [7.2.3.] write_massrelease_per_source_phi
 // [7.2.4.] write_plume_files						// plumetraj.txt and plumesourceposition.txt
 
-
-
 /*
  * Write final deposit results at all locations to file.
  *
- * [7.1.2.]
+ * [7.1.1.]
  *
  * Output file:
  *   massloading.txt
@@ -4147,7 +4292,7 @@ void write_deposit_summary(DEP *location_properties){
 }
 
 
-/* [7.1.4.]
+/* [7.1.2.]
  * Debug utility:
  * Write total mass loading per location for the current phi class.
  * (Not used in normal work flow)
@@ -4168,7 +4313,7 @@ void write_total_massloading(int phiint, double *ttlml){
 	fclose(outfile);
 }
 
-/* [7.1.5.]
+/* [7.1.3.]
  * Write mass loading contribution for each (location, source, phidec).
  *
  * This debug/output file shows how much each source point and decimal phi
@@ -4193,7 +4338,7 @@ void write_massloading_loc_source_phi(int phiint, double *massloading_loc_source
 	fclose(outfile);
 }
 
-/* [7.1.6.]
+/* [7.1.4.]
  * Write mass loading at each location for decimal phi classes.
  *
  * For the current integer phi interval, this function sums
@@ -4393,8 +4538,30 @@ void write_plume_files(
 /////////////////////[END OF THE PART 07]/////////////////////
 
 
-/*********************** */
-/* file output utilities */
+/////////////////////////////////[PART 08]///////////////////////////////// 
+//
+//
+// ==============================
+// [8] Utilities
+// ==============================
+// [8.1] clear_array
+// [8.2] idx_psz
+// [8.3] idx_ps
+// [8.4] get_line_number
+// [8.5] get_wind_line_number
+
+// --- write x-y-z-parameter table ---
+// [8.6] printxyz
+// [8.7] printxyzq
+// [8.8] printxyze
+
+// --- analysis ---
+// [8.9.]  countmeandiameter
+// [8.10.] compare_ttlmassloading
+// [8.11.] compare_Md
+// [8.12.] compute_direction_from_vent
+
+// [8.6.]
 /* 1. x, y, z */
 void printxyz(FILE *in, const char *header, int imax, double *sourceX, double *sourceY, double *sourceZ){
   fprintf(in, "%s", header);
@@ -4403,7 +4570,7 @@ void printxyz(FILE *in, const char *header, int imax, double *sourceX, double *s
   }
 }
 
-/* 2. x, y, z, q */
+// [8.7.]
 void printxyzq(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q, double *t){
   fprintf(in, "%s", header);
   for(int i = 0; i < imax; i++){
@@ -4411,15 +4578,136 @@ void printxyzq(FILE *in, const char *header, int imax, double *x, double *y, dou
   }
 }
 
-/* 3. x, y, z, *exp */
+// [8.8.]
 void printxyze(FILE *in, const char *header, int imax, double *x, double *y, double *z, double *q){
   fprintf(in, "%s", header);
   for(int i = 0; i < imax; i++){
     fprintf(in, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4e\n", i, x[i], y[i], z[i], q[i]);
   }
 }
-/* end of file output utilities */
-/*********************** */
+
+/* [8.9.]
+ * Compute area–mean grain size relationship of deposits.
+ *
+ * This function analyzes deposited mass at all locations and computes:
+ * - cumulative area exceeding a given mean grain size (phi)
+ * - maximum distance from vent for that area
+ *
+ * Two output files are generated:
+ *
+ *   Mean_vs_Area_summary.txt :
+ *     Summary for discrete phi thresholds (0.1 phi bins)
+ *     Columns:
+ *       mean(phi), area [km^2], max distance [m],
+ *       x, y coordinates of max distance, direction from vent [deg]
+ *
+ *   Mean_vs_Area_all.txt :
+ *     Continuous record for all locations
+ *     Columns:
+ *       mean(phi), cumulative area [km^2], max distance [m]
+ *
+ * Notes:
+ * - Only locations with ttlmassloading >= MINIMUM_DEPOSIT_FOR_MD_CALC are used.
+ * - Locations are assumed to be processed in order of increasing distance.
+ * - Area is computed as count × mesh area (MESH_SIZE_IN_KM^2).
+ * - The loop terminates when mean diameter exceeds phi > 5.
+ */
+void countmeandiameter(DEP *l){
+	int count=0;
+	int flag=0;
+	double distance = 0.0;
+	double phi;
+	double x, y;
+	double dir;
+
+	FILE *outfile, *outfile2;
+	outfile = fopen("Mean_vs_Area_summary.txt", "w");
+	outfile2 = fopen("Mean_vs_Area_all.txt", "w");
+
+	fprintf(outfile, "#Mean(phi)\tarea(sqkm)\tmax_dist(m)\tx_of_max_dist(m)\ty_of_max_dist(m)\tdir_of_max_dist(deg)\n");
+	fprintf(outfile2, "#Mean(phi)\tarea(sqkm)\tmax_dist(m)\n");
+
+	for(int j=0; j<LOCDIM; j++){
+		if(l[j].ttlmassloading >= MINIMUM_DEPOSIT_FOR_MD_CALC){
+			if(flag == 0){
+				phi = ceil(l[j].meandiameter * 10) * 0.1;
+				distance = l[j].dist;
+				flag = 1;
+			}
+			if(distance < l[j].dist){
+				distance = l[j].dist; x = l[j].x; y = l[j].y;
+				dir = compute_direction_from_vent(x, y);
+			}
+			if(phi > 5){break;}
+			if(l[j].meandiameter > phi){
+				fprintf(outfile, "%1.4f\t%1.4f\t%1.1f\t%1.1f\t%1.1f\t%1.1f\n", phi, (count-1) * MESH_SIZE_IN_KM * MESH_SIZE_IN_KM, distance, x, y, dir);
+				//phi++
+				phi = phi + 0.1;
+			}
+			count++;
+			fprintf(outfile2, "%1.4f\t%1.4f\t%1.1f\n", l[j].meandiameter, count * MESH_SIZE_IN_KM * MESH_SIZE_IN_KM, distance);
+		}	
+	}
+	fclose(outfile);
+	fclose(outfile2);
+}
+
+/* [8.10.]
+ * Comparison function for sorting DEP by total mass loading.
+ *
+ * Sort order:
+ *   descending (largest ttlmassloading first)
+ *
+ * Used with qsort() in isopach analysis.
+ */
+int compare_ttlmassloading(const void *a, const void *b){
+    double z1 = ((DEP *)a)->ttlmassloading;
+    double z2 = ((DEP *)b)->ttlmassloading;
+
+    if (z1 < z2) return 1;
+    if (z1 > z2) return -1;
+    return 0;
+}
+
+/* [8.11.]
+ * Comparison function for sorting DEP by mean grain size (phi).
+ *
+ * Sort order:
+ *   ascending (smaller phi first)
+ */
+int compare_Md(const void *a, const void *b){
+    double z1 = ((DEP *)a)->meandiameter;
+    double z2 = ((DEP *)b)->meandiameter;
+
+    if (z1 > z2) return 1;
+    if (z1 < z2) return -1;
+    return 0;
+}
+
+/* [8.12.]
+ * Compute direction from vent to (x, y) in degrees.
+ *
+ * Angle is measured clockwise from north (y-axis),
+ * consistent with typical geographic convention.
+ */
+double compute_direction_from_vent(double x, double y){
+    double dir;
+
+    dir = atan2(x, y) * 180.0 / M_PI;
+
+    if(dir < 0){
+        dir += 360.0;
+    }
+
+    return dir;
+}
+
+/////////////////////[END OF THE PART 08]/////////////////////
+
+
+
+
+
 
 /* a utility to get file length */
 int get_line_number(FILE *f){
@@ -4587,122 +4875,8 @@ void read_locations_and_convert_to_vent_centered(FILE *f, double *x, double *y, 
 
 
 
-/*
- * Comparison function for sorting DEP by total mass loading.
- *
- * Sort order:
- *   descending (largest ttlmassloading first)
- *
- * Used with qsort() in isopach analysis.
- */
-int compare_ttlmassloading(const void *a, const void *b){
-    double z1 = ((DEP *)a)->ttlmassloading;
-    double z2 = ((DEP *)b)->ttlmassloading;
-
-    if (z1 < z2) return 1;
-    if (z1 > z2) return -1;
-    return 0;
-}
-
-/*
- * Comparison function for sorting DEP by mean grain size (phi).
- *
- * Sort order:
- *   ascending (smaller phi first)
- */
-int compare_Md(const void *a, const void *b){
-    double z1 = ((DEP *)a)->meandiameter;
-    double z2 = ((DEP *)b)->meandiameter;
-
-    if (z1 > z2) return 1;
-    if (z1 < z2) return -1;
-    return 0;
-}
 
 
-/*
- * Compute area–mean grain size relationship of deposits.
- *
- * This function analyzes deposited mass at all locations and computes:
- * - cumulative area exceeding a given mean grain size (phi)
- * - maximum distance from vent for that area
- *
- * Two output files are generated:
- *
- *   Mean_vs_Area_summary.txt :
- *     Summary for discrete phi thresholds (0.1 phi bins)
- *     Columns:
- *       mean(phi), area [km^2], max distance [m],
- *       x, y coordinates of max distance, direction from vent [deg]
- *
- *   Mean_vs_Area_all.txt :
- *     Continuous record for all locations
- *     Columns:
- *       mean(phi), cumulative area [km^2], max distance [m]
- *
- * Notes:
- * - Only locations with ttlmassloading >= MINIMUM_DEPOSIT_FOR_MD_CALC are used.
- * - Locations are assumed to be processed in order of increasing distance.
- * - Area is computed as count × mesh area (MESH_SIZE_IN_KM^2).
- * - The loop terminates when mean diameter exceeds phi > 5.
- */
-void countmeandiameter(DEP *l){
-	int count=0;
-	int flag=0;
-	double distance = 0.0;
-	double phi;
-	double x, y;
-	double dir;
-
-	FILE *outfile, *outfile2;
-	outfile = fopen("Mean_vs_Area_summary.txt", "w");
-	outfile2 = fopen("Mean_vs_Area_all.txt", "w");
-
-	fprintf(outfile, "#Mean(phi)\tarea(sqkm)\tmax_dist(m)\tx_of_max_dist(m)\ty_of_max_dist(m)\tdir_of_max_dist(deg)\n");
-	fprintf(outfile2, "#Mean(phi)\tarea(sqkm)\tmax_dist(m)\n");
-
-	for(int j=0; j<LOCDIM; j++){
-		if(l[j].ttlmassloading >= MINIMUM_DEPOSIT_FOR_MD_CALC){
-			if(flag == 0){
-				phi = ceil(l[j].meandiameter * 10) * 0.1;
-				distance = l[j].dist;
-				flag = 1;
-			}
-			if(distance < l[j].dist){
-				distance = l[j].dist; x = l[j].x; y = l[j].y;
-				dir = compute_direction_from_vent(x, y);
-			}
-			if(phi > 5){break;}
-			if(l[j].meandiameter > phi){
-				fprintf(outfile, "%1.4f\t%1.4f\t%1.1f\t%1.1f\t%1.1f\t%1.1f\n", phi, (count-1) * MESH_SIZE_IN_KM * MESH_SIZE_IN_KM, distance, x, y, dir);
-				//phi++
-				phi = phi + 0.1;
-			}
-			count++;
-			fprintf(outfile2, "%1.4f\t%1.4f\t%1.1f\n", l[j].meandiameter, count * MESH_SIZE_IN_KM * MESH_SIZE_IN_KM, distance);
-		}	
-	}
-	fclose(outfile);
-	fclose(outfile2);
-}
-
-/*
- * Compute direction from vent to (x, y) in degrees.
- *
- * Angle is measured clockwise from north (y-axis),
- * consistent with typical geographic convention.
- */
-double compute_direction_from_vent(double x, double y){
-    double dir;
-
-    dir = atan2(x, y) * 180.0 / M_PI;
-
-    if(dir < 0){
-        dir += 360.0;
-    }
-
-    return dir;
-}
 
 /*
  * Compute theoretical particle release for each integer phi class.
@@ -4797,153 +4971,12 @@ double calc_pdf_fraction(double phi){				// calculate fraction of the particle s
 }
 
 
-/*
- * Interpolate atmospheric temperature at height h
- * from discrete atmospheric data.
- *
- * Linear interpolation is used between adjacent height levels.
- * If h is above the highest level, the temperature at the highest
- * level is returned.
- */
-double calc_Tatm(double h, int total){
-	int i=1;
-	double t_atm = W1[total-1].t_atm;
 
-	while(i<total){
-		if(h < W1[i].wind_height){
-			t_atm = W1[i-1].t_atm + (W1[i].t_atm - W1[i-1].t_atm) * (h - W1[i-1].wind_height) / (W1[i].wind_height - W1[i-1].wind_height);
-			break;
-		}
-		i++;
-	}
-	//printf("%d\t%1.4f\t%1.4f\n", i, h, v);
-	return t_atm;
-}
 
-/*
- * Estimate atmospheric pressure at height h from discrete atmospheric data.
- *
- * Temperature is linearly interpolated between input height levels.
- * Pressure is then estimated from the pressure at the lower level
- * using a hydrostatic approximation with the mean temperature
- * between the lower level and height h.
- *
- * Input pressure is assumed to be in hPa and converted to Pa.
- */
-double calc_Patm(double h, int total){
-	int i=1;
-	double p_atm;
-	double a;
 
-	double t_atm = W1[total-1].t_atm;
-	double t_atm0 = W1[total-1].t_atm;
-	double p_atm0 = W1[total-1].p_atm;
 
-	while(i<total){
-		if(h < W1[i].wind_height){
-			t_atm = W1[i-1].t_atm + (W1[i].t_atm - W1[i-1].t_atm) * (h - W1[i-1].wind_height) / (W1[i].wind_height - W1[i-1].wind_height);
-			t_atm0 = W1[i-1].t_atm;
-			p_atm0 = W1[i-1].p_atm;
-			break;
-		}
-		i++;
-	}
 
-	a = (h - W1[i-1].wind_height) * GRAVITY * 2 / (Ra * (t_atm + t_atm0));
-	p_atm = p_atm0 / exp(a) * 100; // hPa -> Pa
-	//printf("h = %1.4f\ta_0 = %1.4f\tta_0 = %1.4f\tta_1 = %1.4f\te = %1.4f\tp = %1.4f\tp0 = %1.4f\n", z, a, t_atm0, t_atm, exp(a), p_atm, p_atm0);
-	return p_atm;
-}
 
-/*
- * Compute vertical pressure gradient under hydrostatic balance.
- * (Equation 22 in Woodhouse et al.)
- *
- *   dp/ds = - (g * p) / (R * T)
- */
-double compute_pressure_gradient(double p_tmp, double t_tmp){	// atmospheric pressure
-	double dp_over_ds;
-
-	dp_over_ds = -1 * (GRAVITY * p_tmp) / (Ra * t_tmp);
-	return dp_over_ds;
-}
-
-/*
- * Compute air density using the ideal gas law.
- * (Equation 23 in Woodhouse et al.)
- *
- *   rho = p / (R * T)
- */
-double compute_air_density(double p_tmp, double t_tmp){	// atmospheric density
-	double rho_tmp;
-
-	rho_tmp = p_tmp / (Ra * t_tmp);
-	return rho_tmp;
-}
-
-/*
- * Interpolate wind speed at height h from discrete wind data.
- *
- * If h is above the highest wind-data level, the wind speed at the
- * highest level is returned.
- */
-double interpolate_wind_speed(double h, int total){	//return wind velocity based on discrete wind data
-	int i=1;
-	double v;
-
-	v=W1[total-1].wind_speed;
-
-	while(i<total){
-		if(h < W1[i].wind_height){
-			v = W1[i-1].wind_speed + (W1[i].wind_speed - W1[i-1].wind_speed)*(h - W1[i-1].wind_height) / (W1[i].wind_height - W1[i-1].wind_height);
-			break;
-		}
-		i++;
-	}
-	//printf("%d\t%1.4f\t%1.4f\n", i, h, v);
-	return v;
-}
-
-/*
- * Interpolate wind direction at height h from discrete wind data.
- *
- * Wind direction is circular data, so this function handles wrap-around
- * across 0/360 degrees before linear interpolation.
- *
- * If h is above the highest wind-data level, the wind direction at the
- * highest level is returned.
- */
-double interpolate_wind_direction_across_360(double h, int total){	//return wind direction based on discrete wind data
-	int i=1;
-	double dir;
-	double ratio, wind1, wind2;
-
-	dir=W1[total-1].wind_dir;
-
-	while(i<total){
-		wind1 = W1[i-1].wind_dir;
-		wind2 = W1[i].wind_dir;
-		//printf("h = %1.4f\t, w = %1.4f\n", h, W1[i].wind_height);
-		if(h < W1[i].wind_height){
-			ratio = (h - W1[i-1].wind_height) / (W1[i].wind_height - W1[i-1].wind_height);
-			if(wind2 - wind1 > 180){
-				wind1 = wind1 + 360;
-			}else if(wind1 - wind2 > 180){
-				wind2 = wind2 + 360;
-			}
-
-			dir = ratio * (wind2 - wind1) + wind1;
-
-			if(dir>360){dir=dir-360;}
-			if(dir<0){dir=dir+360;}
-
-			break;
-		}
-		i++;
-	}
-	//printf("dir\t%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\n", i, z, ratio, dir, wind1, wind2);
-	return dir;
-}
 
 
 /*

@@ -2410,7 +2410,9 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
 // ==============================
 // [5.1] calculate_massloading
 
-// [5.1.1.]  mass loading helper
+// calculate_massloading helper
+// [5.1.1.] write_phi_s_table
+// [5.1.2.] store_profile_for_phi
 
 // --- Release from plume ---
 // [5.2.1.]  compute_mass_release_along_plume
@@ -2639,7 +2641,7 @@ void calculate_massloading(
 } /// END OF 5.1.
 
 
-/* [5.1.1.] Mass-loading helper
+/* [5.1.1.] write_phi_s_table
  *
  * Store a vertical profile for a phi class.
  *
@@ -2679,6 +2681,32 @@ void write_phi_s_table(
     }
 
     fclose(outfile);
+}
+
+/*
+ * [5.1.2] Mass-loading helper
+ * Store a vertical 1D profile into a phi-indexed 2D table.
+ *
+ * Copies a height-dependent profile src[z]
+ * into a flattened array dst[phi, z].
+ *
+ * Layout:
+ *   dst[z + phi * ZDIM]
+ *
+ * Used to cache per-phi vertical quantities such as:
+ *   - fall time
+ *   - horizontal drift
+ *   - diffusion parameters
+ *
+ * This enables later lookup by (phi, z)
+ * during mass-loading calculations.
+ *
+ * 
+ */
+void store_profile_for_phi(int phi, double *src, double *dst){
+    for(int z = 0; z < ZDIM; z++){
+        dst[z + phi * ZDIM] = src[z];
+    }
 }
 
 /* [5.2.1.]
@@ -4898,33 +4926,6 @@ void free_all(
 }
 
 /////////////////////[END OF THE PART 09]/////////////////////
-
-
-/*
- * Store a vertical 1D profile into a phi-indexed 2D table.
- *
- * Copies a height-dependent profile src[z]
- * into a flattened array dst[phi, z].
- *
- * Layout:
- *   dst[z + phi * ZDIM]
- *
- * Used to cache per-phi vertical quantities such as:
- *   - fall time
- *   - horizontal drift
- *   - diffusion parameters
- *
- * This enables later lookup by (phi, z)
- * during mass-loading calculations.
- *
- * [5.1.x] Mass-loading helper
- */
-void store_profile_for_phi(int phi, double *src, double *dst){
-    for(int z = 0; z < ZDIM; z++){
-        dst[z + phi * ZDIM] = src[z];
-    }
-}
-
 
 
 /*

@@ -270,7 +270,7 @@ double compute_direction_from_vent(double x, double y);
 void compute_theoretical_particle_release(RELEASE *r);
 
 
-void read_wind(FILE *f, double *h, double *v, double *d, double *t, double *p);
+void read_wind_profile(FILE *f, double *h, double *v, double *d, double *t, double *p);
 void read_locations_and_convert_to_vent_centered(FILE *f, double *x, double *y, double *z);
 
 double plume_calculation(int linenum, double *sourceX, double *sourceY, double *sourceZ, double *sourceRadius, double *timeaftervent, double *wind_alt, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres);
@@ -548,9 +548,12 @@ void free_all(double *wind_alt, double *wind_v, double *wind_dir,
 
 
 
-// [0.]
-// =========================
-// Main program
+/////////////////////////////////[PART 01]///////////////////////////////// 
+//
+//
+// ==============================
+// [1] Main
+//
 // simulation workflow:
 // input → setup → compute → output → cleanup
 // =========================
@@ -789,8 +792,10 @@ int main(int argc, char *argv[]) {
 // ==============================
 // [1] Input
 // ==============================
-// [1.1] read_wind_file
+// [1.1.] read_wind_file
+// [1.1.1.] read_wind
 // [1.2] read_loc_file
+// [1.2.1.] read_locations_and_convert_to_vent_centered
 // [1.3] phiconvert
 // 
 /*[1.1.]
@@ -839,9 +844,84 @@ void read_wind_file(
     *wind_tmp  = (double *)malloc(*windlinenum * sizeof(double));
     *wind_pres = (double *)malloc(*windlinenum * sizeof(double));
 
-    read_wind(in_wind, *wind_alt, *wind_v, *wind_dir, *wind_tmp, *wind_pres);
+    read_wind_profile(in_wind, *wind_alt, *wind_v, *wind_dir, *wind_tmp, *wind_pres);
 
     fclose(in_wind);
+}
+
+/*
+ * [1.1.1] Read wind and atmospheric profiles from input file.
+ *
+ * The input file must contain vertical profiles of:
+ *
+ *   height [m]
+ *   wind speed
+ *   wind direction
+ *   atmospheric temperature
+ *   atmospheric pressure
+ *
+ * Comment lines beginning with '#' are ignored.
+ *
+ * If the first valid level is located above z = 0 m,
+ * an additional synthetic surface-level entry is inserted.
+ *
+ * The inserted surface values use:
+ *   - zero wind speed
+ *   - the same wind direction
+ *   - simple lapse-rate extrapolation for temperature
+ *   - simple hydrostatic extrapolation for pressure
+ *
+ * This guarantees that the atmospheric profile
+ * always begins at ground level.
+ *
+ * Note:
+ * The parsing logic must remain consistent with
+ * get_wind_line_number().
+ */
+void read_wind_profile(FILE *f, double *height, double *speed, double *dir, double *atm_temp, double *atm_pres){
+	char line[1000];
+	int i = 0;
+	int ret;
+	double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
+	while(NULL != fgets(line, 1000, f)){
+		if(line[0] == '#')continue;
+		else{
+		while(ret=sscanf(line,
+		"%lf %lf %lf %lf %lf",
+		&wind_height,
+		&wind_speed,
+		&wind_dir,
+		&wind_temp,
+		&wind_pres), ret != 5){}
+		}
+		if(wind_height == 0 && i==0){
+			height[i] = wind_height;
+			speed[i] = wind_speed;
+			dir[i] = wind_dir;
+			atm_temp[i] = wind_temp;
+			atm_pres[i] = wind_pres;
+		}else if(wind_height > 0 && i==0){
+			height[i] = 0;
+			speed[i] = 0;
+			dir[i] = wind_dir;
+			atm_temp[i] = wind_temp + 0.0065 * wind_height;
+			atm_pres[i] = wind_pres + 0.12 * wind_height;
+			i++;
+			height[i] = wind_height;
+			speed[i] = wind_speed;
+			dir[i] = wind_dir;
+			atm_temp[i] = wind_temp;
+			atm_pres[i] = wind_pres;
+		}else{
+			height[i] = wind_height;
+			speed[i] = wind_speed;
+			dir[i] = wind_dir;
+			atm_temp[i] = wind_temp;
+			atm_pres[i] = wind_pres;
+		}
+		//printf("wind_height\t%1.1f\n", height[i]);
+		i++;
+	}
 }
 
 /* [1.2.]
@@ -880,6 +960,48 @@ void read_loc_file(
     read_locations_and_convert_to_vent_centered(in_loc, *locX, *locY, *locZ);
 
     fclose(in_loc);
+}
+
+/* [1.2.1.]
+ * Read location coordinates and convert them to a vent-centered coordinate system.
+ *
+ * Input coordinates are given in map coordinates. This function converts them
+ * to a vent-centered system (vent = 0):
+ *   x = X_map - VENT_EASTING
+ *   y = Y_map - VENT_NORTHING
+ *
+ * For each location:
+ * - coordinates are stored relative to the vent
+ * - negative elevation is clipped to z = 0
+ * - map boundaries (MAPENDW/E/S/N) are updated
+ *
+ * Note:
+ * The entire simulation uses a vent-centered coordinate system.
+ */
+void read_locations_and_convert_to_vent_centered(FILE *f, double *x, double *y, double *z){
+	char line[1000];
+	int i = 0;
+	double xtmp, ytmp, ztmp;
+	int ret;
+	//double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
+	while(NULL != fgets(line, 1000, f)){
+		if(line[0] == '#')continue;
+		else{
+		while(ret=sscanf(line,
+		"%lf %lf %lf",
+		&xtmp,
+		&ytmp,
+		&ztmp), ret != 3){}
+		}
+		x[i] = xtmp - VENT_EASTING; y[i] = ytmp - VENT_NORTHING; 
+		if(ztmp < 0){z[i] = 0;}else{z[i] = ztmp;}
+		if(xtmp-VENT_EASTING < MAPENDW){MAPENDW = xtmp-VENT_EASTING;}	//20241224
+		if(xtmp-VENT_EASTING > MAPENDE){MAPENDE = xtmp-VENT_EASTING;}
+		if(ytmp-VENT_NORTHING < MAPENDS){MAPENDS = ytmp-VENT_NORTHING;}
+		if(ytmp-VENT_NORTHING > MAPENDN){MAPENDN = ytmp-VENT_NORTHING;}
+		i++;
+	}
+	printf("MAP BOUNDARY W %1.0f\tE %1.0f\tS %1.0f\tN %1.0f\n", MAPENDW, MAPENDE, MAPENDS, MAPENDN);
 }
 
 /* [1.3.]
@@ -1264,6 +1386,27 @@ void initialize_simulation_state(
     clear_array(LOCDIM, cummassphi);
 
     compute_theoretical_particle_release(r);
+}
+
+/* [2.3.1]
+ * Compute theoretical particle release for each integer phi class.
+ *
+ * The release mass is obtained by integrating the grain-size PDF
+ * over decimal phi bins within each integer phi interval, then
+ * multiplying by the total eruption mass.
+ */
+void compute_theoretical_particle_release(RELEASE *r){
+	double phi;
+	double pdf_fraction = 0.0;
+
+	for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
+		for(int phidecimal = 0; phidecimal < PHIDECDIM; phidecimal++){
+			phi = phiint + MAX_GRAINSIZE + 1 - phidecimal * INTERVAL_DECIMAL_PHI;
+			pdf_fraction += calc_pdf_fraction(phi);
+		}// END OF DECIMAL PHI LOOP
+		r[phiint].theoretical = pdf_fraction * ERUPTION_MASS;
+		pdf_fraction=0.0;
+	}
 }
 /////////////////////[END OF THE PART 02]/////////////////////
 
@@ -2267,6 +2410,8 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
 // ==============================
 // [5.1] calculate_massloading
 
+// [5.1.1.]  mass loading helper
+
 // --- Release from plume ---
 // [5.2.1.]  compute_mass_release_along_plume
 // [5.2.2.]  compute_total_released_mass
@@ -2493,6 +2638,48 @@ void calculate_massloading(
 	}// END OF INTEGER PHI LOOP
 } /// END OF 5.1.
 
+
+/* [5.1.1.] Mass-loading helper
+ *
+ * Store a vertical profile for a phi class.
+ *
+ * Copies a height-dependent quantity src[z]
+ * into the storage array associated with phi.
+ *
+ * Used for caching intermediate profiles during
+ * mass-loading calculations, including:
+ *   - fall time
+ *   - horizontal drift
+ *   - diffusion parameters
+ */
+void write_phi_s_table(
+    const char *filename,
+    double *massrelease_by_phi_and_source,
+    double base,
+    int stepnum,
+    double stepdelta
+){
+    FILE *outfile = fopen(filename, "w");
+
+    // header
+    fprintf(outfile, "s");
+    for(int phiint = 0; phiint < stepnum; phiint++){
+        fprintf(outfile, "\tphi%1.1f", base - phiint * stepdelta);
+    }
+    fprintf(outfile, "\n");
+
+    // data
+    for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
+        fprintf(outfile, "%d", s);
+        for(int phiint = 0; phiint < stepnum; phiint++){
+            fprintf(outfile, "\t%1.4f",
+                massrelease_by_phi_and_source[s + phiint * SDIM_FOR_FALL_CALC]);
+        }
+        fprintf(outfile, "\n");
+    }
+
+    fclose(outfile);
+}
 
 /* [5.2.1.]
  * Compute released particle mass along the plume axis for one decimal phi class.
@@ -3113,192 +3300,6 @@ __global__ void funcD01b(
 } // END OF 5.5.2.
 
 /////////////////////[END OF THE PART 05]/////////////////////
-
-
-/*
- * Free all dynamically allocated memory used in the simulation.
- *
- * [9.1.]
- *
- * This includes:
- * - input data arrays
- * - plume and source arrays
- * - atmospheric profiles
- * - working arrays for fall, drift, and mass loading
- * - location properties and release data structures
- *
- * Centralizing deallocation helps prevent memory leaks and
- * keeps resource management consistent.
- */
-void free_all(
-    double *wind_alt,
-    double *wind_v,
-    double *wind_dir,
-    double *wind_tmp,
-    double *wind_pres,
-    double *locX,
-    double *locY,
-    double *locZ,
-    double *plume_trajX,
-    double *plume_trajY,
-    double *plume_trajZ,
-    double *plume_trajR,
-    double *plume_trajT,
-    double *sourceX,
-    double *sourceY,
-    double *sourceZ,
-    double *sourceRadius,
-    double *sourceT,
-    double *h,
-    double *atmT,
-    double *atmP,
-    double *windX,
-    double *windY,
-    double *ttlfalltime,
-    double *driftX,
-    double *driftY,
-    double *ttlfalltime_phiint,
-    double *ttldriftX_phiint,
-    double *ttldriftY_phiint,
-    double *ttlfalltime_phidec,
-    double *ttldriftX_phidec,
-    double *ttldriftY_phidec,
-    double *massreleased_per_ds_and_phidec,
-    SEG *massreleased_per_ds,
-    double *cloud_center_x,
-    double *cloud_center_y,
-    double *cloud_sigma2,
-    double *tmpmassloading,
-    double *ttlmassloading,
-    double *cummassphi,
-    DEP *location_properties,
-    RELEASE *r
-){
-    /*
-     * Free all dynamically allocated arrays used in the simulation.
-     * Centralizing deallocation helps prevent memory leaks and
-     * keeps resource management consistent.
-     */
-
-    free(wind_alt);
-    free(wind_v);
-    free(wind_dir);
-    free(wind_tmp);
-    free(wind_pres);
-
-    free(locX);
-    free(locY);
-    free(locZ);
-
-    free(plume_trajX);
-    free(plume_trajY);
-    free(plume_trajZ);
-    free(plume_trajR);
-    free(plume_trajT);
-
-    free(sourceX);
-    free(sourceY);
-    free(sourceZ);
-    free(sourceRadius);
-    free(sourceT);
-
-    free(h);
-    free(atmT);
-    free(atmP);
-    free(windX);
-    free(windY);
-
-    free(ttlfalltime);
-    free(driftX);
-    free(driftY);
-
-    free(ttlfalltime_phiint);
-    free(ttldriftX_phiint);
-    free(ttldriftY_phiint);
-
-    free(ttlfalltime_phidec);
-    free(ttldriftX_phidec);
-    free(ttldriftY_phidec);
-
-    free(massreleased_per_ds_and_phidec);
-    free(massreleased_per_ds);
-
-    free(cloud_center_x);
-    free(cloud_center_y);
-    free(cloud_sigma2);
-
-    free(tmpmassloading);
-    free(ttlmassloading);
-    free(cummassphi);
-
-    free(location_properties);
-    free(r);
-}
-
-
-/*
- * Store 1D vertical profile into a 2D array indexed by (phi, z).
- * [unclasified]
- * Copies:
- *   src[z] → dst[phi, z]
- *
- * Used for fall time, drift, and other height-dependent quantities.
- */
-void store_profile_for_phi(int phiint, double *src, double *dst){
-    for(int z = 0; z < ZDIM; z++){
-        dst[z + phiint * ZDIM] = src[z];
-    }
-}
-
-/*
- * Write (phi, s) table of mass release per source point.
- *
- * Outputs a table where:
- * - rows correspond to source index s
- * - columns correspond to phi classes
- *
- * Data layout:
- *   data[s + phi * SDIM]
- */
-void write_phi_s_table(
-    const char *filename,
-    double *massrelease_by_phi_and_source,
-    double base,
-    int stepnum,
-    double stepdelta
-){
-    FILE *outfile = fopen(filename, "w");
-
-    // header
-    fprintf(outfile, "s");
-    for(int phiint = 0; phiint < stepnum; phiint++){
-        fprintf(outfile, "\tphi%1.1f", base - phiint * stepdelta);
-    }
-    fprintf(outfile, "\n");
-
-    // data
-    for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
-        fprintf(outfile, "%d", s);
-        for(int phiint = 0; phiint < stepnum; phiint++){
-            fprintf(outfile, "\t%1.4f",
-                massrelease_by_phi_and_source[s + phiint * SDIM_FOR_FALL_CALC]);
-        }
-        fprintf(outfile, "\n");
-    }
-
-    fclose(outfile);
-}
-
-
-/*
- * Set all elements of the array to zero.
- */
-void clear_array(int dim, double *ary){
-    for(int i = 0; i < dim; i++){
-        ary[i] = 0.0;
-    }
-}
-
 
 
 
@@ -4561,6 +4562,71 @@ void write_plume_files(
 // [8.11.] compare_Md
 // [8.12.] compute_direction_from_vent
 
+
+/*
+ * [8.5.] Count wind-profile levels in a wind file.
+ *
+ * Reads vertical wind-profile data of the form:
+ *
+ *   height  speed  direction  temperature  pressure
+ *
+ * Comment lines beginning with '#' are ignored.
+ *
+ * If the first valid level is not located at z = 0,
+ * one additional near-ground level is reserved.
+ *
+ * Returns:
+ *   Total number of wind levels including the
+ *   additional ground level when required.
+ */
+int get_wind_line_number(FILE *f){
+
+    char line[1000];
+
+    int i = 0;
+    int additional = 1;
+
+    double wind_height;
+    double wind_speed;
+    double wind_dir;
+    double wind_temp;
+    double wind_pres;
+
+    while(NULL != fgets(line, sizeof(line), f)){
+
+        /* Skip comments */
+        if(line[0] == '#'){
+            continue;
+        }
+
+        /* Parse one wind-profile line */
+        int ret = sscanf(line,
+                         "%lf %lf %lf %lf %lf",
+                         &wind_height,
+                         &wind_speed,
+                         &wind_dir,
+                         &wind_temp,
+                         &wind_pres);
+
+        /* Ignore malformed lines */
+        if(ret != 5){
+            continue;
+        }
+
+        /*
+         * If the first valid level is not z = 0,
+         * allocate one extra ground-level slot.
+         */
+        if(wind_height == 0.0 && i == 0){
+            additional = 0;
+        }
+
+        i++;
+    }
+
+    return(i + additional);
+}
+
 // [8.6.]
 /* 1. x, y, z */
 void printxyz(FILE *in, const char *header, int imax, double *sourceX, double *sourceY, double *sourceZ){
@@ -4706,6 +4772,172 @@ double compute_direction_from_vent(double x, double y){
 
 
 
+/////////////////////////////////[PART 08]///////////////////////////////// 
+//
+//
+// ==============================
+// [9] Cleanup
+// ==============================
+/* Free all dynamically allocated memory used in the simulation.
+ *
+ * [9.1.]
+ *
+ * This includes:
+ * - input data arrays
+ * - plume and source arrays
+ * - atmospheric profiles
+ * - working arrays for fall, drift, and mass loading
+ * - location properties and release data structures
+ *
+ * Centralizing deallocation helps prevent memory leaks and
+ * keeps resource management consistent.
+ */
+void free_all(
+    double *wind_alt,
+    double *wind_v,
+    double *wind_dir,
+    double *wind_tmp,
+    double *wind_pres,
+    double *locX,
+    double *locY,
+    double *locZ,
+    double *plume_trajX,
+    double *plume_trajY,
+    double *plume_trajZ,
+    double *plume_trajR,
+    double *plume_trajT,
+    double *sourceX,
+    double *sourceY,
+    double *sourceZ,
+    double *sourceRadius,
+    double *sourceT,
+    double *h,
+    double *atmT,
+    double *atmP,
+    double *windX,
+    double *windY,
+    double *ttlfalltime,
+    double *driftX,
+    double *driftY,
+    double *ttlfalltime_phiint,
+    double *ttldriftX_phiint,
+    double *ttldriftY_phiint,
+    double *ttlfalltime_phidec,
+    double *ttldriftX_phidec,
+    double *ttldriftY_phidec,
+    double *massreleased_per_ds_and_phidec,
+    SEG *massreleased_per_ds,
+    double *cloud_center_x,
+    double *cloud_center_y,
+    double *cloud_sigma2,
+    double *tmpmassloading,
+    double *ttlmassloading,
+    double *cummassphi,
+    DEP *location_properties,
+    RELEASE *r
+){
+    /*
+     * Free all dynamically allocated arrays used in the simulation.
+     * Centralizing deallocation helps prevent memory leaks and
+     * keeps resource management consistent.
+     */
+
+    free(wind_alt);
+    free(wind_v);
+    free(wind_dir);
+    free(wind_tmp);
+    free(wind_pres);
+
+    free(locX);
+    free(locY);
+    free(locZ);
+
+    free(plume_trajX);
+    free(plume_trajY);
+    free(plume_trajZ);
+    free(plume_trajR);
+    free(plume_trajT);
+
+    free(sourceX);
+    free(sourceY);
+    free(sourceZ);
+    free(sourceRadius);
+    free(sourceT);
+
+    free(h);
+    free(atmT);
+    free(atmP);
+    free(windX);
+    free(windY);
+
+    free(ttlfalltime);
+    free(driftX);
+    free(driftY);
+
+    free(ttlfalltime_phiint);
+    free(ttldriftX_phiint);
+    free(ttldriftY_phiint);
+
+    free(ttlfalltime_phidec);
+    free(ttldriftX_phidec);
+    free(ttldriftY_phidec);
+
+    free(massreleased_per_ds_and_phidec);
+    free(massreleased_per_ds);
+
+    free(cloud_center_x);
+    free(cloud_center_y);
+    free(cloud_sigma2);
+
+    free(tmpmassloading);
+    free(ttlmassloading);
+    free(cummassphi);
+
+    free(location_properties);
+    free(r);
+}
+
+/////////////////////[END OF THE PART 09]/////////////////////
+
+
+/*
+ * Store a vertical 1D profile into a phi-indexed 2D table.
+ *
+ * Copies a height-dependent profile src[z]
+ * into a flattened array dst[phi, z].
+ *
+ * Layout:
+ *   dst[z + phi * ZDIM]
+ *
+ * Used to cache per-phi vertical quantities such as:
+ *   - fall time
+ *   - horizontal drift
+ *   - diffusion parameters
+ *
+ * This enables later lookup by (phi, z)
+ * during mass-loading calculations.
+ *
+ * [5.1.x] Mass-loading helper
+ */
+void store_profile_for_phi(int phi, double *src, double *dst){
+    for(int z = 0; z < ZDIM; z++){
+        dst[z + phi * ZDIM] = src[z];
+    }
+}
+
+
+
+/*
+ * Set all elements of the array to zero.
+ */
+void clear_array(int dim, double *ary){
+    for(int i = 0; i < dim; i++){
+        ary[i] = 0.0;
+    }
+}
+
+
+
 
 
 
@@ -4720,184 +4952,10 @@ int get_line_number(FILE *f){
 	return(i);
 }
 
-/******************/
-/* WIND DATA INPUT*/
-/*
- * NOTE (refactor candidate):
- * get_wind_line_number() and read_wind() share almost identical
- * parsing logic and should ideally be unified.
- *
- * Current design reads the file twice:
- *   1) count number of lines
- *   2) read data into arrays
- *
- * Future improvement:
- * - merge parsing into a single pass
- * - dynamically allocate or resize arrays
- * - avoid duplicated sscanf logic
- */
-
-/*
- * Count number of wind data points to be stored.
- *
- * This function reads the wind input file and counts valid data lines.
- * If the first data height is above 0 m, one additional surface-level
- * data point is assumed and added to the count.
- *
- * Note:
- * This parsing logic must remain consistent with read_wind().
- */
-int get_wind_line_number(FILE *f){
-	char line[1000];
-	int i = 0;
-	int additional = 1;
-	int ret;
-	double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
-	while(NULL != fgets(line, 1000, f)){
-		if(line[0] == '#')continue;
-		else{
-		while(ret=sscanf(line,
-		"%lf %lf %lf %lf %lf",
-		&wind_height,
-		&wind_speed,
-		&wind_dir,
-		&wind_temp,
-		&wind_pres), ret != 5){}
-		}
-		if(wind_height == 0 && i==0){
-			additional = 0;
-		}
-		//printf("wind_height\t%1.1f\n", height[i]);
-		i++;
-	}
-	return(i + additional);
-}
-
-/*
- * Read wind and atmospheric data from input file.
- *
- * The file is expected to contain:
- *   height, wind speed, wind direction, temperature, pressure
- *
- * If the first data height is above 0 m, a synthetic surface-level
- * data point is inserted at height = 0 m.
- *
- * Note:
- * This parsing logic must remain consistent with get_wind_line_number().
- */
-void read_wind(FILE *f, double *height, double *speed, double *dir, double *atm_temp, double *atm_pres){
-	char line[1000];
-	int i = 0;
-	int ret;
-	double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
-	while(NULL != fgets(line, 1000, f)){
-		if(line[0] == '#')continue;
-		else{
-		while(ret=sscanf(line,
-		"%lf %lf %lf %lf %lf",
-		&wind_height,
-		&wind_speed,
-		&wind_dir,
-		&wind_temp,
-		&wind_pres), ret != 5){}
-		}
-		if(wind_height == 0 && i==0){
-			height[i] = wind_height;
-			speed[i] = wind_speed;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp;
-			atm_pres[i] = wind_pres;
-		}else if(wind_height > 0 && i==0){
-			height[i] = 0;
-			speed[i] = 0;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp + 0.0065 * wind_height;
-			atm_pres[i] = wind_pres + 0.12 * wind_height;
-			i++;
-			height[i] = wind_height;
-			speed[i] = wind_speed;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp;
-			atm_pres[i] = wind_pres;
-		}else{
-			height[i] = wind_height;
-			speed[i] = wind_speed;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp;
-			atm_pres[i] = wind_pres;
-		}
-		//printf("wind_height\t%1.1f\n", height[i]);
-		i++;
-	}
-}
-
-/*
- * Read location coordinates and convert them to a vent-centered coordinate system.
- *
- * Input coordinates are given in map coordinates. This function converts them
- * to a vent-centered system (vent = 0):
- *   x = X_map - VENT_EASTING
- *   y = Y_map - VENT_NORTHING
- *
- * For each location:
- * - coordinates are stored relative to the vent
- * - negative elevation is clipped to z = 0
- * - map boundaries (MAPENDW/E/S/N) are updated
- *
- * Note:
- * The entire simulation uses a vent-centered coordinate system.
- */
-void read_locations_and_convert_to_vent_centered(FILE *f, double *x, double *y, double *z){
-	char line[1000];
-	int i = 0;
-	double xtmp, ytmp, ztmp;
-	int ret;
-	//double wind_height, wind_speed, wind_dir, wind_temp, wind_pres;
-	while(NULL != fgets(line, 1000, f)){
-		if(line[0] == '#')continue;
-		else{
-		while(ret=sscanf(line,
-		"%lf %lf %lf",
-		&xtmp,
-		&ytmp,
-		&ztmp), ret != 3){}
-		}
-		x[i] = xtmp - VENT_EASTING; y[i] = ytmp - VENT_NORTHING; 
-		if(ztmp < 0){z[i] = 0;}else{z[i] = ztmp;}
-		if(xtmp-VENT_EASTING < MAPENDW){MAPENDW = xtmp-VENT_EASTING;}	//20241224
-		if(xtmp-VENT_EASTING > MAPENDE){MAPENDE = xtmp-VENT_EASTING;}
-		if(ytmp-VENT_NORTHING < MAPENDS){MAPENDS = ytmp-VENT_NORTHING;}
-		if(ytmp-VENT_NORTHING > MAPENDN){MAPENDN = ytmp-VENT_NORTHING;}
-		i++;
-	}
-	printf("MAP BOUNDARY W %1.0f\tE %1.0f\tS %1.0f\tN %1.0f\n", MAPENDW, MAPENDE, MAPENDS, MAPENDN);
-}
 
 
 
 
-
-
-/*
- * Compute theoretical particle release for each integer phi class.
- *
- * The release mass is obtained by integrating the grain-size PDF
- * over decimal phi bins within each integer phi interval, then
- * multiplying by the total eruption mass.
- */
-void compute_theoretical_particle_release(RELEASE *r){
-	double phi;
-	double pdf_fraction = 0.0;
-
-	for(int phiint = MIN_GRAINSIZE - MAX_GRAINSIZE - 1; phiint >= 0; phiint--){
-		for(int phidecimal = 0; phidecimal < PHIDECDIM; phidecimal++){
-			phi = phiint + MAX_GRAINSIZE + 1 - phidecimal * INTERVAL_DECIMAL_PHI;
-			pdf_fraction += calc_pdf_fraction(phi);
-		}// END OF DECIMAL PHI LOOP
-		r[phiint].theoretical = pdf_fraction * ERUPTION_MASS;
-		pdf_fraction=0.0;
-	}
-}
 
 
 /* Compute particle terminal fall velocity based on Reynolds-number-dependent drag regimes */

@@ -2416,6 +2416,7 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
 
 // --- Release from plume ---
 // [5.2.1.]  compute_mass_release_along_plume
+// [5.2.1.1.] calc_pdf_fraction
 // [5.2.2.]  compute_total_released_mass
 // [5.2.3.]  get_sdimcutoff
 
@@ -2758,6 +2759,35 @@ void compute_mass_release_along_plume(int zmax, int phidecimal, double phi, doub
 	}
 }	// END OF 5.2.1.
 
+/* [5.2.1.1.]
+ * Compute mass fraction for a decimal phi bin.
+ *
+ * The grain-size distribution is approximated by a normal distribution
+ * in phi scale with:
+ *   - MEDIAN_GRAINSIZE as the mean
+ *   - STD_GRAINSIZE as the standard deviation
+ *
+ * The probability density is evaluated at the center of the phi bin:
+ *
+ *   phi_center = phi - INTERVAL_DECIMAL_PHI / 2
+ *
+ * and multiplied by the bin width INTERVAL_DECIMAL_PHI.
+ */
+double calc_pdf_fraction(double phi){				// calculate fraction of the particle size phi
+																						// based on particle distribution function
+	double demon1, demon2, demon3;
+	double frac;
+	//                 1                 -(x-myu)^2
+	// f(x) = ------------------   exp ---------------
+	//        sqrt(2pi * sigma^2)         2*sigma^2
+
+	demon1 = sqrt(2 * M_PI * pow(STD_GRAINSIZE, 2));
+	demon2 = pow((phi - INTERVAL_DECIMAL_PHI / 2 - MEDIAN_GRAINSIZE), 2);
+	demon3 = 2 * pow(STD_GRAINSIZE, 2);
+
+	frac = 1 / demon1 * exp(-1 * demon2 / demon3) * INTERVAL_DECIMAL_PHI;
+	return(frac);
+}
 
 /* [5.2.2.]
  * Compute total released mass from the plume for the current phi class.
@@ -4592,6 +4622,38 @@ void write_plume_files(
 
 
 /*
+ * [8.1] Initialize a double array with zeros.
+ */
+void clear_array(int dim, double *ary){
+    for(int i = 0; i < dim; i++){
+        ary[i] = 0.0;
+    }
+}
+
+/*
+ * [8.4] Count non-comment lines in a text file.
+ *
+ * Lines beginning with '#' are ignored.
+ */
+int get_line_number(FILE *f){
+
+    char line[1000];
+
+    int i = 0;
+
+    while(NULL != fgets(line, sizeof(line), f)){
+
+        if(line[0] == '#'){
+            continue;
+        }
+
+        i++;
+    }
+
+    return(i);
+}
+
+/*
  * [8.5.] Count wind-profile levels in a wind file.
  *
  * Reads vertical wind-profile data of the form:
@@ -4928,37 +4990,6 @@ void free_all(
 /////////////////////[END OF THE PART 09]/////////////////////
 
 
-/*
- * Set all elements of the array to zero.
- */
-void clear_array(int dim, double *ary){
-    for(int i = 0; i < dim; i++){
-        ary[i] = 0.0;
-    }
-}
-
-
-
-
-
-
-/* a utility to get file length */
-int get_line_number(FILE *f){
-	char line[1000];
-	int i = 0;
-	while(NULL != fgets(line, 1000, f)){
-		if(line[0] == '#')continue;
-		i++;
-	}
-	return(i);
-}
-
-
-
-
-
-
-
 /* Compute particle terminal fall velocity based on Reynolds-number-dependent drag regimes */
 double calc_particle_terminal_velocity(double h, double ashdiam, double part_density, double p, double t) {
   // Modified from function “particle_fall_time” in tephra_calc.c of tephra2
@@ -5002,32 +5033,6 @@ double calc_particle_terminal_velocity(double h, double ashdiam, double part_den
 
 
 
-/*
- * Compute mass fraction for a decimal phi bin.
- *
- * The grain-size distribution is approximated by a normal distribution
- * in phi scale with:
- * - MEDIAN_GRAINSIZE as the mean
- * - STD_GRAINSIZE as the standard deviation
- *
- * This function evaluates the probability density at the center of
- * the phi bin and multiplies it by INTERVAL_DECIMAL_PHI.
- */
-double calc_pdf_fraction(double phi){				// calculate fraction of the particle size phi
-																						// based on particle distribution function
-	double demon1, demon2, demon3;
-	double frac;
-	//                 1                 -(x-myu)^2
-	// f(x) = ------------------   exp ---------------
-	//        sqrt(2pi * sigma^2)         2*sigma^2
-
-	demon1 = sqrt(2 * M_PI * pow(STD_GRAINSIZE, 2));
-	demon2 = pow((phi - INTERVAL_DECIMAL_PHI / 2 - MEDIAN_GRAINSIZE), 2);
-	demon3 = 2 * pow(STD_GRAINSIZE, 2);
-
-	frac = 1 / demon1 * exp(-1 * demon2 / demon3) * INTERVAL_DECIMAL_PHI;
-	return(frac);
-}
 
 
 

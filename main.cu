@@ -2399,7 +2399,8 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
 	}
 	//printf("dir\t%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\n", i, z, ratio, dir, wind1, wind2);
 	return dir;
-}
+} // end of 4.1.1.6.
+
 /////////////////////[END OF THE PART 04]/////////////////////
 
 /////////////////////////////////[PART 05]///////////////////////////////// 
@@ -2418,12 +2419,14 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
 // [5.2.1.]  compute_mass_release_along_plume
 // [5.2.1.1.] calc_pdf_fraction
 // [5.2.2.]  compute_total_released_mass
-// [5.2.3.]  get_sdimcutoff
+// [5.2.3.] write_cloud_trajectory_and_mass
+// [5.2.4.]  get_sdimcutoff
 
 // --- Diffusion and drift in the air ---
 // [5.3.1.]  compute_falltime_and_drift_profile
 // [5.3.2.]  drift_from_a_certain_source
 // [5.3.3.]  calc_cloud_sigma2
+// [5.3.4.]  calc_particle_terminal_velocity
 
 // --- CPU mass loading ---
 // [5.4.]  calc_mass_loading
@@ -2682,10 +2685,10 @@ void write_phi_s_table(
     }
 
     fclose(outfile);
-}
+} // end of 5.1.1.
 
 /*
- * [5.1.2] Mass-loading helper
+ * [5.1.2.] Mass-loading helper
  * Store a vertical 1D profile into a phi-indexed 2D table.
  *
  * Copies a height-dependent profile src[z]
@@ -2708,7 +2711,7 @@ void store_profile_for_phi(int phi, double *src, double *dst){
     for(int z = 0; z < ZDIM; z++){
         dst[z + phi * ZDIM] = src[z];
     }
-}
+} // end of 5.1.2.
 
 /* [5.2.1.]
  * Compute released particle mass along the plume axis for one decimal phi class.
@@ -2787,7 +2790,7 @@ double calc_pdf_fraction(double phi){				// calculate fraction of the particle s
 
 	frac = 1 / demon1 * exp(-1 * demon2 / demon3) * INTERVAL_DECIMAL_PHI;
 	return(frac);
-}
+} // end of 5.2.1.1.
 
 /* [5.2.2.]
  * Compute total released mass from the plume for the current phi class.
@@ -2811,8 +2814,52 @@ double compute_total_released_mass(double *massreleased_per_ds_and_phidec){
 	return(totalofthefraction);
 }	// END OF 5.2.2.
 
-
 /* [5.2.3.]
+ * Write cloud-center trajectory and summarize released mass for one integer phi class.
+ *
+ * For each source interval s along the plume axis, this function:
+ * - sums released mass over decimal phi bins within the current integer phi class
+ * - stores the summed mass in massreleased_per_ds[s].mass_from_ds[phiint]
+ * - optionally writes cloud-center coordinates and dispersion to depcenttraj*.txt
+ *
+ * Inputs:
+ * - x, y   : cloud-center coordinates indexed by (phidec, s, z)
+ * - sig    : cloud dispersion variance indexed by (phidec, s, z)
+ * - r      : released mass indexed by (phidec, s)
+ *
+ * Note:
+ * The output trajectory uses z = 0, i.e. the cloud center at ground level.
+ */
+void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *massreleased_per_ds_and_phidec, SEG *massreleased_per_ds){
+		int idz; //(phidec * sdim * zdim) + (s * zdim) + z
+		int phi;
+		double released;	// mass released in the s interval of the size fraction
+		char string[20];
+		FILE *outfile;
+
+		phi = phiint + MAX_GRAINSIZE + 1; 
+		//printf("maxgrainsize = %1.0f phiint = %d\n", MAX_GRAINSIZE, phiint);
+		if(WRITE_DEPCENT_TRAJECTORY){
+			sprintf(string, "depcenttraj%d.txt", phi);
+			outfile = fopen(string, "w");
+			fprintf(outfile, "i\tx_from_vent\ty_from_vent\tx_coord\ty_coord\tcloud_sigma2\tmass_released\n");
+		}
+
+		for(int i = 0; i < SDIM_FOR_FALL_CALC; i++){
+			released = 0.0;
+			for(int gsize = 0; gsize < PHIDECDIM; gsize++){
+				released += massreleased_per_ds_and_phidec[i + gsize * SDIM_FOR_FALL_CALC];
+			}
+			
+			massreleased_per_ds[i].mass_from_ds[phiint] = released; 
+			
+			idz = i * ZDIM;
+			if(WRITE_DEPCENT_TRAJECTORY) fprintf(outfile, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4e\n", i, cloud_center_x[idz], cloud_center_y[idz], cloud_center_x[idz] + VENT_EASTING, cloud_center_y[idz] + VENT_NORTHING, cloud_sigma2[idz], released);
+		}
+		if(WRITE_DEPCENT_TRAJECTORY) fclose(outfile);
+} // End of 5.2.3.
+
+/* [5.2.4.]
  * Determine SDIMCUTOFF for the current integer phi class.
  *
  * SDIMCUTOFF is the effective upper limit of source points used in
@@ -2848,7 +2895,7 @@ void get_sdimcutoff(
             break;
         }
     }
-}	// END OF 5.2.3.
+}	// END OF 5.2.4.
 
 /* [5.3.1.]
  * Compute fall time and wind drift for a particle of a given grain size.
@@ -3003,6 +3050,48 @@ double calc_cloud_sigma2(double source_radius, double falltime) {
 	return(cloud_sigma2);
 } // END OF 5.3.3.
 
+
+// [5.3.4.]
+/* Compute particle terminal fall velocity based on Reynolds-number-dependent drag regimes */
+double calc_particle_terminal_velocity(double h, double ashdiam, double part_density, double p, double t) {
+  // Modified from function “particle_fall_time” in tephra_calc.c of tephra2
+	double air_density, air_viscosity, temp;
+ 	double vtl, vti, vtt;
+ 	double reynolds_number;
+ 	double particle_terminal_velocity;
+	double gravity = 9.81;
+
+	// p in Pa here. Change to hPa
+  air_density = p * 0.0034837 / t;  // US STD Atomosphere 1976 P 15. Eq. 42
+  air_viscosity = 1.458e-6 * pow(t, 1.5) / (t + 110.4);	// US STD Atomosphere 1976 P 19. Eq. 51
+
+#ifdef TEPHRA2
+	// air density and viscosity in the previous versions such as Tephra2 and WT
+  	air_density = 1.293 * exp(-h / 8200);
+  	air_viscosity = 0.000018325;
+#endif
+	/*  Based on Bonadonna and Phillips (2003) JGR 108, 2034. Eq. A4
+    	vtl is terminal velocity (m/s) in laminar regime Re < 6
+    	vti is terminal velocity (m/s) in intermediate regime 6 <Re <500
+    	vtt is terminal velocity (m/s) in turbulent regime Re > 500*/
+  	vtl = gravity * ashdiam * ashdiam * (part_density - air_density) / (18 * air_viscosity);
+  	reynolds_number = ashdiam * air_density * vtl / air_viscosity;
+  	particle_terminal_velocity = vtl;
+
+	if (reynolds_number >= 6.0) {
+    		temp = 4 * gravity * gravity * (part_density - air_density) * (part_density - air_density) / (225 * air_density * air_viscosity);
+    		vti = ashdiam * pow(temp, 1.0 / 3.0);
+    		reynolds_number = ashdiam * air_density * vti / air_viscosity;
+    		particle_terminal_velocity = vti;
+
+  		if (reynolds_number >= 500.0) {
+    			vtt = sqrt( 3.1 * gravity * ashdiam * (part_density - air_density) / air_density);
+    			reynolds_number =  ashdiam * air_density * vtt / air_viscosity;
+    			particle_terminal_velocity = vtt;
+  		}
+  	}
+  return particle_terminal_velocity;
+} // end of 5.3.4.
 
 /* [5.4.]
  * Compute mass loading at ground locations using GPU acceleration.
@@ -4988,102 +5077,3 @@ void free_all(
 }
 
 /////////////////////[END OF THE PART 09]/////////////////////
-
-
-/* Compute particle terminal fall velocity based on Reynolds-number-dependent drag regimes */
-double calc_particle_terminal_velocity(double h, double ashdiam, double part_density, double p, double t) {
-  // Modified from function “particle_fall_time” in tephra_calc.c of tephra2
-	double air_density, air_viscosity, temp;
- 	double vtl, vti, vtt;
- 	double reynolds_number;
- 	double particle_terminal_velocity;
-	double gravity = 9.81;
-
-	// p in Pa here. Change to hPa
-  air_density = p * 0.0034837 / t;  // US STD Atomosphere 1976 P 15. Eq. 42
-  air_viscosity = 1.458e-6 * pow(t, 1.5) / (t + 110.4);	// US STD Atomosphere 1976 P 19. Eq. 51
-
-#ifdef TEPHRA2
-	// air density and viscosity in the previous versions such as Tephra2 and WT
-  	air_density = 1.293 * exp(-h / 8200);
-  	air_viscosity = 0.000018325;
-#endif
-	/*  Based on Bonadonna and Phillips (2003) JGR 108, 2034. Eq. A4
-    	vtl is terminal velocity (m/s) in laminar regime Re < 6
-    	vti is terminal velocity (m/s) in intermediate regime 6 <Re <500
-    	vtt is terminal velocity (m/s) in turbulent regime Re > 500*/
-  	vtl = gravity * ashdiam * ashdiam * (part_density - air_density) / (18 * air_viscosity);
-  	reynolds_number = ashdiam * air_density * vtl / air_viscosity;
-  	particle_terminal_velocity = vtl;
-
-	if (reynolds_number >= 6.0) {
-    		temp = 4 * gravity * gravity * (part_density - air_density) * (part_density - air_density) / (225 * air_density * air_viscosity);
-    		vti = ashdiam * pow(temp, 1.0 / 3.0);
-    		reynolds_number = ashdiam * air_density * vti / air_viscosity;
-    		particle_terminal_velocity = vti;
-
-  		if (reynolds_number >= 500.0) {
-    			vtt = sqrt( 3.1 * gravity * ashdiam * (part_density - air_density) / air_density);
-    			reynolds_number =  ashdiam * air_density * vtt / air_viscosity;
-    			particle_terminal_velocity = vtt;
-  		}
-  	}
-  return particle_terminal_velocity;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-/*
- * Write cloud-center trajectory and summarize released mass for one integer phi class.
- *
- * For each source interval s along the plume axis, this function:
- * - sums released mass over decimal phi bins within the current integer phi class
- * - stores the summed mass in massreleased_per_ds[s].mass_from_ds[phiint]
- * - optionally writes cloud-center coordinates and dispersion to depcenttraj*.txt
- *
- * Inputs:
- * - x, y   : cloud-center coordinates indexed by (phidec, s, z)
- * - sig    : cloud dispersion variance indexed by (phidec, s, z)
- * - r      : released mass indexed by (phidec, s)
- *
- * Note:
- * The output trajectory uses z = 0, i.e. the cloud center at ground level.
- */
-void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *massreleased_per_ds_and_phidec, SEG *massreleased_per_ds){
-		int idz; //(phidec * sdim * zdim) + (s * zdim) + z
-		int phi;
-		double released;	// mass released in the s interval of the size fraction
-		char string[20];
-		FILE *outfile;
-
-		phi = phiint + MAX_GRAINSIZE + 1; 
-		//printf("maxgrainsize = %1.0f phiint = %d\n", MAX_GRAINSIZE, phiint);
-		if(WRITE_DEPCENT_TRAJECTORY){
-			sprintf(string, "depcenttraj%d.txt", phi);
-			outfile = fopen(string, "w");
-			fprintf(outfile, "i\tx_from_vent\ty_from_vent\tx_coord\ty_coord\tcloud_sigma2\tmass_released\n");
-		}
-
-		for(int i = 0; i < SDIM_FOR_FALL_CALC; i++){
-			released = 0.0;
-			for(int gsize = 0; gsize < PHIDECDIM; gsize++){
-				released += massreleased_per_ds_and_phidec[i + gsize * SDIM_FOR_FALL_CALC];
-			}
-			
-			massreleased_per_ds[i].mass_from_ds[phiint] = released; 
-			
-			idz = i * ZDIM;
-			if(WRITE_DEPCENT_TRAJECTORY) fprintf(outfile, "%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4e\n", i, cloud_center_x[idz], cloud_center_y[idz], cloud_center_x[idz] + VENT_EASTING, cloud_center_y[idz] + VENT_NORTHING, cloud_sigma2[idz], released);
-		}
-		if(WRITE_DEPCENT_TRAJECTORY) fclose(outfile);
-}

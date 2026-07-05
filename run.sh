@@ -6,6 +6,7 @@ nvcc main.cu -o twice
 start=$(date +%s.%N)
 
 ./twice conf.conf wind.txt topo.txt
+#./twice conf.conf wind.txt ./_topodata/ks_topo_utm100.txt
 
 end=$(date +%s.%N)
 

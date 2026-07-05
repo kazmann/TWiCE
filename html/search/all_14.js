@@ -1,0 +1,25 @@
+var searchData=
+[
+  ['wind_0',['WIND',['../structWIND.html',1,'']]],
+  ['wind_5fdir_1',['wind_dir',['../structWIND.html#a5c663c09534129960281e54804ea7744',1,'WIND']]],
+  ['wind_5fheight_2',['wind_height',['../structWIND.html#ae6a71ba5ca5eb5035b2b7e9a51ea5c3a',1,'WIND']]],
+  ['wind_5finterval_3',['WIND_INTERVAL',['../main_8cu.html#ad3037b6fb7bb2f9a482b9eac03efb240',1,'main.cu']]],
+  ['wind_5fspeed_4',['wind_speed',['../structWIND.html#a960675f80757670813cbbb33460537ae',1,'WIND']]],
+  ['write_5fcloud_5ftrajectory_5fand_5fmass_5',['write_cloud_trajectory_and_mass',['../main_8cu.html#a58ff7f8e328a2525207f7a480e7c1429',1,'main.cu']]],
+  ['write_5fcolumn_5ffiles_6',['WRITE_COLUMN_FILES',['../main_8cu.html#a7e8f48713840de0c7498e4a741e323d0',1,'main.cu']]],
+  ['write_5fconf_7',['WRITE_CONF',['../main_8cu.html#a4962db2140e53dbe2c91ec57534c6119',1,'main.cu']]],
+  ['write_5fdecimal_5ffall_5ftraj_8',['WRITE_DECIMAL_FALL_TRAJ',['../main_8cu.html#a558405fe46fad4c90db45122b78ea74d',1,'main.cu']]],
+  ['write_5fdecimal_5fmassloading_9',['WRITE_DECIMAL_MASSLOADING',['../main_8cu.html#ae3d2742b232293d15c1f683ebab5a3d8',1,'main.cu']]],
+  ['write_5fdepcent_5ftrajectory_10',['WRITE_DEPCENT_TRAJECTORY',['../main_8cu.html#a8c01bd9d7b9fe7cec44514be7fed8dd4',1,'main.cu']]],
+  ['write_5fdeposit_5fsummary_11',['write_deposit_summary',['../main_8cu.html#aecef62d7c0b1571d6b41793900c8ce46',1,'main.cu']]],
+  ['write_5ffall_5finfo_5ffiles_12',['WRITE_FALL_INFO_FILES',['../main_8cu.html#a7a74b38cd87d3c853ab769c26327be58',1,'main.cu']]],
+  ['write_5fmassloading_13',['WRITE_MASSLOADING',['../main_8cu.html#a00cb360e8e2bdedb1797a59217054fcd',1,'main.cu']]],
+  ['write_5fmassloading_5floc_5fsource_5fphi_14',['write_massloading_loc_source_phi',['../main_8cu.html#af9c58b05173c34a19b767e3abdd77200',1,'main.cu']]],
+  ['write_5fmassloading_5fper_5fphidec_5fat_5flocations_15',['write_massloading_per_phidec_at_locations',['../main_8cu.html#afc78304501765f0444e5674c76d82df1',1,'main.cu']]],
+  ['write_5fmassrelease_5fper_5fsource_5fphi_16',['write_massrelease_per_source_phi',['../main_8cu.html#ae22dd4ed48f588e0d5e0638f84358886',1,'main.cu']]],
+  ['write_5fparticle_5frelease_5ftheoretical_5fvs_5factual_17',['write_particle_release_theoretical_vs_actual',['../main_8cu.html#a3dea14fd61b5e7dcd9be389eac68fffa',1,'main.cu']]],
+  ['write_5fphi_5fs_5ftable_18',['write_phi_s_table',['../main_8cu.html#a4f8e3a5c6534fc01341b6ff7566a7c79',1,'main.cu']]],
+  ['write_5fplume_5ffiles_19',['write_plume_files',['../main_8cu.html#aff5b6c47c7e8eabc9bc9f7dcdbd06e46',1,'main.cu']]],
+  ['write_5ftotal_5fmassloading_20',['write_total_massloading',['../main_8cu.html#a011ed59344464d9f8b6f7b62ebd18e3f',1,'main.cu']]],
+  ['write_5fvertical_5fprofiles_5ffor_5fphi_21',['write_vertical_profiles_for_phi',['../main_8cu.html#a3395b147aec496c227145a098f94b214',1,'main.cu']]]
+];

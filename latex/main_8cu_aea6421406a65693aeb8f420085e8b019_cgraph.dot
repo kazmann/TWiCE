@@ -1,0 +1,18 @@
+digraph "compute_mass_release_along_plume"
+{
+ // LATEX_PDF_SIZE
+  bgcolor="transparent";
+  edge [fontname=Helvetica,fontsize=10,labelfontname=Helvetica,labelfontsize=10];
+  node [fontname=Helvetica,fontsize=10,shape=box,height=0.2,width=0.4];
+  rankdir="LR";
+  Node1 [id="Node000001",label="compute_mass_release\l_along_plume",height=0.2,width=0.4,color="gray40", fillcolor="grey60", style="filled", fontcolor="black",tooltip=" "];
+  Node1 -> Node2 [id="edge7_Node000001_Node000002",color="steelblue1",style="solid",tooltip=" "];
+  Node2 [id="Node000002",label="calc_particle_terminal\l_velocity",height=0.2,width=0.4,color="grey40", fillcolor="white", style="filled",URL="$main_8cu.html#ae67042998053dd5fe349624565fef9f7",tooltip=" "];
+  Node2 -> Node3 [id="edge8_Node000002_Node000003",color="steelblue1",style="solid",tooltip=" "];
+  Node3 [id="Node000003",label="funcD01a",height=0.2,width=0.4,color="grey40", fillcolor="white", style="filled",URL="$main_8cu.html#ad4ee0b5a45471bab63d687f3dd8422f5",tooltip="Compute partial mass loading for each (location, source, phi) element (= lsmpl)."];
+  Node3 -> Node3 [id="edge9_Node000003_Node000003",color="steelblue1",style="solid",tooltip=" "];
+  Node1 -> Node4 [id="edge10_Node000001_Node000004",color="steelblue1",style="solid",tooltip=" "];
+  Node4 [id="Node000004",label="calc_pdf_fraction",height=0.2,width=0.4,color="grey40", fillcolor="white", style="filled",URL="$main_8cu.html#a578be52e8a58739d48662f03447b3429",tooltip=" "];
+  Node4 -> Node3 [id="edge11_Node000004_Node000003",color="steelblue1",style="solid",tooltip=" "];
+  Node1 -> Node3 [id="edge12_Node000001_Node000003",color="steelblue1",style="solid",tooltip=" "];
+}

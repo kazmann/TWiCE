@@ -1,0 +1,6 @@
+<map id="get_line_number" name="get_line_number">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,29,136,55"/>
+<area shape="rect" id="Node000002" href="$main_8cu.html#ad4ee0b5a45471bab63d687f3dd8422f5" title="Compute partial mass loading for each (location, source, phi) element (= lsmpl)." alt="" coords="184,29,268,55"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="136,39,170,39,170,45,136,45"/>
+<area shape="poly" id="edge2_Node000002_Node000002" title=" " alt="" coords="200,31,194,21,197,11,208,5,226,3,247,6,256,15,253,19,245,11,226,8,210,10,202,15,200,20,204,28"/>
+</map>

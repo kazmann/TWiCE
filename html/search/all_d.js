@@ -1,0 +1,19 @@
+var searchData=
+[
+  ['p_0',['p',['../main_8cu.html#aace2d484b0e3651abd108f04803d316c',1,'main.cu']]],
+  ['p_5fatm_1',['p_atm',['../structWIND.html#a52011835da59ebfa10da074a8c1b0b51',1,'WIND']]],
+  ['phi_2',['phi',['../structRELEASE.html#a882fb85b494f6a94c21a5ab8dbbf94be',1,'RELEASE']]],
+  ['phiconvert_3',['phiconvert',['../main_8cu.html#af1332183673d75bc72dbb182e9ed3466',1,'main.cu']]],
+  ['phidecdim_4',['PHIDECDIM',['../main_8cu.html#aa32947ac17f5eed5ac912f9ec4aef180',1,'main.cu']]],
+  ['phigenerator_5',['phigenerator',['../main_8cu.html#ac48713e178164577276add45628515fc',1,'main.cu']]],
+  ['plume_5fcalculation_6',['plume_calculation',['../main_8cu.html#ae6b15c8c1f843a5eb98b366a9d59bea5',1,'main.cu']]],
+  ['plume_5fheight_7',['PLUME_HEIGHT',['../main_8cu.html#a70dbb9ec6c1be089ff63eb2f25f9f9a2',1,'main.cu']]],
+  ['plume_5fradius_5fcorrection_8',['PLUME_RADIUS_CORRECTION',['../main_8cu.html#aad8cb73926219da971e1e5829d4e32e7',1,'main.cu']]],
+  ['plume_5fthickness_9',['PLUME_THICKNESS',['../main_8cu.html#a350c7d8d674d02200c5b0bbfd63fe24d',1,'main.cu']]],
+  ['print_5fprogress_10',['PRINT_PROGRESS',['../main_8cu.html#afca9f5c13883da225a89e55d91f2fb43',1,'main.cu']]],
+  ['printxyz_11',['printxyz',['../main_8cu.html#a457e2d455e32bec932bef617c8e6f628',1,'main.cu']]],
+  ['printxyze_12',['printxyze',['../main_8cu.html#a472c853b399d8a62bd8fcd589e87aa29',1,'main.cu']]],
+  ['printxyzq_13',['printxyzq',['../main_8cu.html#a28fd5cec3acc70b04b522514d4ae301a',1,'main.cu']]],
+  ['psz_14',['PSZ',['../structBuffers.html#a246865f0016f2e55fe153ad1de4b6cf0',1,'Buffers']]],
+  ['pumice_5fdensity_15',['PUMICE_DENSITY',['../main_8cu.html#a6ad78f13b193ba37241dc87a415a8845',1,'main.cu']]]
+];

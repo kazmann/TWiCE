@@ -1,0 +1,410 @@
+diff --git a/main.cu b/main.cu
+index 06227b2..36a429c 100644
+--- a/main.cu
++++ b/main.cu
+@@ -305,6 +305,7 @@ void calc_mass_loading_location(int phiint, double *mlj, double *massloading, do
+ #ifdef CUDA
+ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *ttlml, double *massreleased);
+ void accumulate_massloading_for_phi(int phiint, double *massloading, double *ttl, double *cummassphi);
++__global__ void funcD01_direct(int, int, int, int, float, float, float *, float *, float *, float *, float *, float *, float *, float *);
+ __global__ void funcD01a(int, int, int, int, float, float *, float *, float *, float *, float *, float *, float *, float *, float *, float *);
+ __global__ void funcD01b(int N, int LOCDIM, float *massloading_loc_source_phiD, float *ttlmlD);
+ #endif
+@@ -2436,8 +2437,9 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
+ // [5.4.2] idx_psz
+ 
+ // --- CUDA backend ---
+-// [5.5.1.]  funcD01a
+-// [5.5.2.]  funcD01b
++// [5.5.0.]  funcD01_direct	merged funcD01a and funcD01b
++// [5.5.1.]  funcD01a		compute partial mass loading for each (location, source, phidec)
++// [5.5.2.]  funcD01b		reduce over (source, phidec) to obtain total per location
+ 
+ // --- GPU buffer / wrapper ---
+ // [5.6.1.]  prepare_mass_loading
+@@ -2449,8 +2451,8 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
+ // [5.6.7.]  copy_location_data_to_device_buffers
+ // [5.6.8.]  launch_mass_loading_kernels_buffers
+ // [5.6.9.]  copy_result_to_host_buffers
+-// [5.6.10.]  cleanup_buffers
+-// [5.6.11.]accumulate_massloading_for_phi
++// [5.6.10.] cleanup_buffers
++// [5.6.11.] accumulate_massloading_for_phi
+ 
+ // CPU functions
+ // [5.5.1b] calc_mass_loading_element
+@@ -3094,24 +3096,44 @@ double calc_particle_terminal_velocity(double h, double ashdiam, double part_den
+ } // end of 5.3.4.
+ 
+ /* [5.4.]
+- * Compute mass loading at ground locations using GPU acceleration.
+- *
+- * This (calc_mass_loading) function:
+- * - prepares host buffers (double → float conversion)
+- * - allocates and initializes GPU buffers
+- * - launches CUDA kernels for mass loading computation
+- * - retrieves total mass loading per location
+- *
+- * GPU computation:
+- * - funcD01a: compute partial mass loading for each (location, source, phidec)
+- * - funcD01b: reduce over (source, phidec) to obtain total per location
+- *
+- * Data layout:
+- * - PSZ: (phidec, source, z)
+- * - LSP: (location, phidec, source)
+- *
+- * Note:
+- * Computation is performed in chunks over locations for memory efficiency.
++ * Compute mass loading at all ground locations using CUDA.
++ * This function manages the complete GPU workflow for mass-loading calculation.
++ *
++ * Inputs
++ * -------
++ * sourceZ
++ *     Height of each particle source along the plume axis.
++ *
++ * cloud_center_x, cloud_center_y
++ *     Horizontal coordinates of the particle cloud center
++ *     for every (phidec, source, height).
++ *
++ * cloud_sigma2
++ *     Horizontal variance (σ²) of the particle cloud
++ *     for every (phidec, source, height).
++ *
++ * locX, locY, locZ
++ *     Coordinates of all ground locations.
++ *
++ * massreleased
++ *     Released particle mass for every (phidec, source).
++ *
++ * Outputs
++ * --------
++ * ttlml
++ *     Total mass loading at each ground location.
++ *
++ * massloading_loc_source_phi
++ *     (Optional / diagnostic)
++ *     Mass loading for each combination of
++ *     (location, source, decimal-phi).
++ *
++ * Notes
++ * -----
++ * Because the number of ground locations (LOCDIM) may exceed available
++ * GPU memory, locations are processed in chunks. *******Fixed plume-related
++ * data are copied to the GPU once for each phi interval, whereas
++ * location data are transferred for each chunk.
+  */
+ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *ttlml, double *massreleased){
+ 	/* 
+@@ -3268,6 +3290,162 @@ idx_ps(int phidec, int s, int sdim)
+     return phidec * sdim + s;
+ } // END OF 5.4.2.
+ 
++/* [5.5.0.]
++ * merged funcD01 and funcD02 to calculate massloading for a certain phi class of 1 phi interval for location
++*/
++__global__ void funcD01_direct(
++    int locdim,
++    int zdim,
++    int sdim,
++    int phidecdim,
++    float zdelta,
++    float *ttlmlD,
++    float *sourceZD,
++    float *centX,
++    float *centY,
++    float *cloud_sigma2,
++    float *locX,
++    float *locY,
++    float *locZ,
++    float *massreleased
++){
++    int j, s, z, phidec, ips, ipsz;
++    float depcentX, depcentY, sigma2, square_distance;
++
++    j = threadIdx.x + blockIdx.x * blockDim.x;
++
++    if (j >= locdim) return;
++
++    ttlmlD[j] = 0.0f;
++
++    /* Loop over all source points and decimal phi classes */
++    for (s = 0; s < sdim; s++) {
++
++        /* Sources below the current location do not contribute */
++        if (locZ[j] >= sourceZD[s]) continue;
++
++        z = (int)(locZ[j] / zdelta);
++
++        for (phidec = 0; phidec < phidecdim; phidec++) {
++
++            ipsz = idx_psz(phidec, s, z, sdim, zdim);
++            ips  = idx_ps(phidec, s, sdim);
++
++            depcentX =
++                centX[ipsz + 1]
++                + (centX[ipsz] - centX[ipsz + 1])
++                * (zdelta * (z + 1) - locZ[j]) / zdelta;
++
++            depcentY =
++                centY[ipsz + 1]
++                + (centY[ipsz] - centY[ipsz + 1])
++                * (zdelta * (z + 1) - locZ[j]) / zdelta;
++
++            sigma2 =
++                cloud_sigma2[ipsz + 1]
++                + (cloud_sigma2[ipsz] - cloud_sigma2[ipsz + 1])
++                * (zdelta * (z + 1) - locZ[j]) / zdelta;
++
++            square_distance =
++                (depcentX - locX[j]) * (depcentX - locX[j])
++                + (depcentY - locY[j]) * (depcentY - locY[j]);
++
++#ifndef TEPHRA2
++            ttlmlD[j] +=
++                1.0f / (M_2PI * sigma2)
++                * exp(-square_distance / (2.0f * sigma2))
++                * massreleased[ips];
++#else
++            ttlmlD[j] +=
++                1.0f / (M_PI * sigma2)
++                * exp(-square_distance / sigma2)
++                * massreleased[ips];
++#endif
++        }
++    }
++} // End of 5.5.0
++
++__global__ void funcD01_direct_reduce(
++    int locdim,
++    int zdim,
++    int sdim,
++    int phidecdim,
++    float zdelta,
++    float *ttlmlD,
++    float *sourceZD,
++    float *centX,
++    float *centY,
++    float *cloud_sigma2,
++    float *locX,
++    float *locY,
++    float *locZ,
++    float *massreleased
++){
++    int j = blockIdx.x;      // 1 block = 1 location
++    int t = threadIdx.x;
++
++    extern __shared__ float shsum[];
++
++    float local_sum = 0.0f;
++    int n = sdim * phidecdim;
++
++    for (int k = t; k < n; k += blockDim.x) {
++        int s = k / phidecdim;
++        int phidec = k % phidecdim;
++
++        if (locZ[j] >= sourceZD[s]) continue;
++
++        int z = (int)(locZ[j] / zdelta);
++
++        int ipsz = idx_psz(phidec, s, z, sdim, zdim);
++        int ips  = idx_ps(phidec, s, sdim);
++
++        float depcentX =
++            centX[ipsz + 1]
++            + (centX[ipsz] - centX[ipsz + 1])
++            * (zdelta * (z + 1) - locZ[j]) / zdelta;
++
++        float depcentY =
++            centY[ipsz + 1]
++            + (centY[ipsz] - centY[ipsz + 1])
++            * (zdelta * (z + 1) - locZ[j]) / zdelta;
++
++        float sigma2 =
++            cloud_sigma2[ipsz + 1]
++            + (cloud_sigma2[ipsz] - cloud_sigma2[ipsz + 1])
++            * (zdelta * (z + 1) - locZ[j]) / zdelta;
++
++        float square_distance =
++            (depcentX - locX[j]) * (depcentX - locX[j])
++            + (depcentY - locY[j]) * (depcentY - locY[j]);
++
++#ifndef TEPHRA2
++        local_sum +=
++            1.0f / (M_2PI * sigma2)
++            * exp(-square_distance / (2.0f * sigma2))
++            * massreleased[ips];
++#else
++        local_sum +=
++            1.0f / (M_PI * sigma2)
++            * exp(-square_distance / sigma2)
++            * massreleased[ips];
++#endif
++    }
++
++    shsum[t] = local_sum;
++    __syncthreads();
++
++    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
++        if (t < stride) {
++            shsum[t] += shsum[t + stride];
++        }
++        __syncthreads();
++    }
++
++    if (t == 0) {
++        ttlmlD[j] = shsum[0];
++    }
++}
+ 
+ /**
+ /* [5.5.1.]
+@@ -3372,12 +3550,12 @@ __global__ void funcD01a(
+             + (cloud_sigma2[ipsz] - cloud_sigma2[ipsz + 1])
+             * (zdelta * (z + 1) - locZ[j]) / zdelta;
+ 
+-        /*square_distance =
+-            pow((depcentX - locX[j]), 2)
+-            + pow((depcentY - locY[j]), 2);*/
+-		square_distance =
+-            (depcentX - locX[j]) * (depcentX - locX[j])
++        square_distance =
++            (depcentX - locX[j]) * (depcentX - locX[j]) 
+             + (depcentY - locY[j]) * (depcentY - locY[j]);
++		/*square_distance =
++            (depcentX - locX[j]) * (depcentX - locX[j])
++            + (depcentY - locY[j]) * (depcentY - locY[j]);*/
+ 
+         /*
+          * Only sources above the current location (locZ[j]) contribute
+@@ -3387,14 +3565,14 @@ __global__ void funcD01a(
+             /* Original formulation: Bonadonna et al. (2005) */
+             massloading_loc_source_phiD[tid] =
+                 1 / (M_2PI * sigma2)
+-                * expf(-square_distance / (2 * sigma2))
++                * exp(-square_distance / (2 * sigma2))
+                 * massreleased[ips];
+ 
+ #ifdef TEPHRA2
+             /* Formulation used in Tephra2 and WT */
+             massloading_loc_source_phiD[tid] =
+                 1 / (M_PI * sigma2)
+-                * expf(-square_distance / sigma2)
++                * exp(-square_distance / sigma2)
+                 * massreleased[ips];
+ #endif
+         }
+@@ -3446,10 +3624,6 @@ __global__ void funcD01b(
+     }
+ } // END OF 5.5.2.
+ 
+-/////////////////////[END OF THE PART 05]/////////////////////
+-
+-
+-
+ #ifdef CUDA
+ 
+ /* [5.6.1.] */
+@@ -3850,32 +4024,69 @@ static void launch_mass_loading_kernels_buffers(
+     dim3 block(blocksize, 1, 1);
+     dim3 grid((N + block.x - 1) / block.x, 1, 1);
+ 
+-    funcD01a<<<grid, block>>>(
+-        N, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
+-        b->device.massloading_loc_source_phiD,
+-        b->device.ttlmlD,
+-        b->device.sourceZD,
+-        b->device.centXD,
+-        b->device.centYD,
+-        b->device.sigsqD,
+-        b->device.locXD,
+-        b->device.locYD,
+-        b->device.locZD,
+-        b->device.massreleasedD
+-    );
+-    CUDA_KERNEL_CHECK();
+-
+-    dim3 grid2((locN + block.x - 1) / block.x, 1, 1);
++	if (!(WRITE_DECIMAL_MASSLOADING)) {
++		int blocksize = 128;
++		dim3 block(blocksize);
++		dim3 grid_reduce(locN);
++		size_t shmem = blocksize * sizeof(float);
++
++		funcD01_direct_reduce<<<grid_reduce, block, shmem>>>(
++			locN, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
++			b->device.ttlmlD,
++			b->device.sourceZD,
++			b->device.centXD,
++			b->device.centYD,
++			b->device.sigsqD,
++			b->device.locXD,
++			b->device.locYD,
++			b->device.locZD,
++			b->device.massreleasedD
++		);
+ 
+-    funcD01b<<<grid2, block>>>(
+-        N,
+-        locN,
+-        b->device.massloading_loc_source_phiD,
+-        b->device.ttlmlD
+-    );
+-    CUDA_KERNEL_CHECK();
++		/*
++		dim3 grid_direct((locN + block.x - 1) / block.x, 1, 1);
++		funcD01_direct<<<grid_direct, block>>>(
++			locN, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
++			b->device.ttlmlD,
++			b->device.sourceZD,
++			b->device.centXD,
++			b->device.centYD,
++			b->device.sigsqD,
++			b->device.locXD,
++			b->device.locYD,
++			b->device.locZD,
++			b->device.massreleasedD
++		);*/
++		CUDA_KERNEL_CHECK();
++
++	} else {
++		funcD01a<<<grid, block>>>(
++			N, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
++			b->device.massloading_loc_source_phiD,
++			b->device.ttlmlD,
++			b->device.sourceZD,
++			b->device.centXD,
++			b->device.centYD,
++			b->device.sigsqD,
++			b->device.locXD,
++			b->device.locYD,
++			b->device.locZD,
++			b->device.massreleasedD
++		);
++		CUDA_KERNEL_CHECK();
++
++		dim3 grid2((locN + block.x - 1) / block.x, 1, 1);
++
++		funcD01b<<<grid2, block>>>(
++			N,
++			locN,
++			b->device.massloading_loc_source_phiD,
++			b->device.ttlmlD
++		);
++		CUDA_KERNEL_CHECK();
++	}
+ 
+-    CUDA_CHECK(cudaDeviceSynchronize());
++CUDA_CHECK(cudaDeviceSynchronize());
+ }
+ /* end of Step 6c*/
+ 
+@@ -4044,7 +4255,7 @@ void set_coordinates_to_location_properties(DEP *location_properties, double *lo
+     location_properties[j].x = locX[j];
+ 		location_properties[j].y = locY[j];
+ 		location_properties[j].z = locZ[j];
+-		location_properties[j].dist = locX[j] * locX[j] + locY[j] * locY[j];
++		location_properties[j].dist = sqrt(pow(locX[j], 2) + pow(locY[j], 2));
+   }
+ }
+ 

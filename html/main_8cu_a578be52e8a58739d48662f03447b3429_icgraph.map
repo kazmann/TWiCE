@@ -1,0 +1,14 @@
+<map id="calc_pdf_fraction" name="calc_pdf_fraction">
+<area shape="rect" id="Node000001" title=" " alt="" coords="551,45,684,70"/>
+<area shape="rect" id="Node000002" href="$main_8cu.html#aea6421406a65693aeb8f420085e8b019" title=" " alt="" coords="327,5,503,45"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="537,47,502,42,503,37,537,42"/>
+<area shape="rect" id="Node000005" href="$main_8cu.html#a72ac8368d710ab699514af30fe875d1a" title=" " alt="" coords="337,69,493,109"/>
+<area shape="poly" id="edge4_Node000001_Node000005" title=" " alt="" coords="538,73,493,80,492,74,537,67"/>
+<area shape="rect" id="Node000003" href="$main_8cu.html#a85375278221779e4460955985a1ecc54" title=" " alt="" coords="108,15,279,41"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="313,29,279,30,279,24,313,24"/>
+<area shape="rect" id="Node000004" href="$main_8cu.html#a0ddf1224851353fc92bfbff6f499fa97" title=" " alt="" coords="5,46,60,71"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="114,46,61,56,60,51,113,41"/>
+<area shape="rect" id="Node000006" href="$main_8cu.html#a18098957ea1166410f4e9bff9e16c141" title=" " alt="" coords="116,67,271,107"/>
+<area shape="poly" id="edge5_Node000005_Node000006" title=" " alt="" coords="323,91,271,90,271,85,323,86"/>
+<area shape="poly" id="edge6_Node000006_Node000004" title=" " alt="" coords="102,73,60,66,61,61,103,68"/>
+</map>

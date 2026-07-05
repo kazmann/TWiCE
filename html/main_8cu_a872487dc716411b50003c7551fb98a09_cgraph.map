@@ -1,0 +1,11 @@
+<map id="read_loc_file" name="read_loc_file">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,35,109,60"/>
+<area shape="rect" id="Node000002" href="$main_8cu.html#a7e57e884939e64ccc5abe12a5efd1484" title=" " alt="" coords="191,5,322,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="109,37,177,27,178,32,110,42"/>
+<area shape="rect" id="Node000004" href="$main_8cu.html#a5df067700d296fc861b4ae695972e49e" title=" " alt="" coords="157,55,356,95"/>
+<area shape="poly" id="edge4_Node000001_Node000004" title=" " alt="" coords="110,52,144,57,143,62,109,57"/>
+<area shape="rect" id="Node000003" href="$main_8cu.html#ad4ee0b5a45471bab63d687f3dd8422f5" title="Compute partial mass loading for each (location, source, phi) element (= lsmpl)." alt="" coords="404,35,488,60"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="323,25,391,36,390,41,322,31"/>
+<area shape="poly" id="edge3_Node000003_Node000003" title=" " alt="" coords="415,36,408,26,412,16,425,10,446,8,472,12,483,20,480,24,470,16,446,13,426,15,415,20,413,26,419,33"/>
+<area shape="poly" id="edge5_Node000004_Node000003" title=" " alt="" coords="356,58,390,53,391,58,357,63"/>
+</map>

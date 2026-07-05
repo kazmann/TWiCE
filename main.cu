@@ -3387,14 +3387,14 @@ __global__ void funcD01a(
             /* Original formulation: Bonadonna et al. (2005) */
             massloading_loc_source_phiD[tid] =
                 1 / (M_2PI * sigma2)
-                * exp(-square_distance / (2 * sigma2))
+                * expf(-square_distance / (2 * sigma2))
                 * massreleased[ips];
 
 #ifdef TEPHRA2
             /* Formulation used in Tephra2 and WT */
             massloading_loc_source_phiD[tid] =
                 1 / (M_PI * sigma2)
-                * exp(-square_distance / sigma2)
+                * expf(-square_distance / sigma2)
                 * massreleased[ips];
 #endif
         }
@@ -4044,7 +4044,7 @@ void set_coordinates_to_location_properties(DEP *location_properties, double *lo
     location_properties[j].x = locX[j];
 		location_properties[j].y = locY[j];
 		location_properties[j].z = locZ[j];
-		location_properties[j].dist = sqrt(pow(locX[j], 2) + pow(locY[j], 2));
+		location_properties[j].dist = locX[j] * locX[j] + locY[j] * locY[j];
   }
 }
 

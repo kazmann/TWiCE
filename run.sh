@@ -11,7 +11,7 @@ end=$(date +%s.%N)
 
 elapsed=$(awk "BEGIN {print $end - $start}")
 
-
+<< EOF
 if diff massloading.txt massloading_in_loc.txt > /dev/null; then
     echo "OK: output matches"
 else
@@ -19,5 +19,6 @@ else
     diff massloading.txt massloading_in_loc.txt
     exit 1
 fi
+EOF
 
 printf "Elapsed time: %.3f sec\n" "$elapsed"

@@ -305,7 +305,7 @@ void calc_mass_loading_location(int phiint, double *mlj, double *massloading, do
 #ifdef CUDA
 void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *ttlml, double *massreleased);
 void accumulate_massloading_for_phi(int phiint, double *massloading, double *ttl, double *cummassphi);
-__global__ void funcD01_direct(int, int, int, int, float, float, float *, float *, float *, float *, float *, float *, float *, float *);
+__global__ void funcD01_direct(int, int, int, int, float, float *, float *, float *, float *, float *, float *, float *, float *, float *);
 __global__ void funcD01a(int, int, int, int, float, float *, float *, float *, float *, float *, float *, float *, float *, float *, float *);
 __global__ void funcD01b(int N, int LOCDIM, float *massloading_loc_source_phiD, float *ttlmlD);
 #endif
@@ -3291,81 +3291,11 @@ idx_ps(int phidec, int s, int sdim)
 } // END OF 5.4.2.
 
 /* [5.5.0.]
- * merged funcD01 and funcD02 to calculate massloading for a certain phi class of 1 phi interval for location
+ * merged funcD01a and funcD01b to calculate massloading for a certain phi class of 1 phi interval for location
+ * direct: directly computes ttlmlD without storing massloading_loc_source_phiD
 */
+
 __global__ void funcD01_direct(
-    int locdim,
-    int zdim,
-    int sdim,
-    int phidecdim,
-    float zdelta,
-    float *ttlmlD,
-    float *sourceZD,
-    float *centX,
-    float *centY,
-    float *cloud_sigma2,
-    float *locX,
-    float *locY,
-    float *locZ,
-    float *massreleased
-){
-    int j, s, z, phidec, ips, ipsz;
-    float depcentX, depcentY, sigma2, square_distance;
-
-    j = threadIdx.x + blockIdx.x * blockDim.x;
-
-    if (j >= locdim) return;
-
-    ttlmlD[j] = 0.0f;
-
-    /* Loop over all source points and decimal phi classes */
-    for (s = 0; s < sdim; s++) {
-
-        /* Sources below the current location do not contribute */
-        if (locZ[j] >= sourceZD[s]) continue;
-
-        z = (int)(locZ[j] / zdelta);
-
-        for (phidec = 0; phidec < phidecdim; phidec++) {
-
-            ipsz = idx_psz(phidec, s, z, sdim, zdim);
-            ips  = idx_ps(phidec, s, sdim);
-
-            depcentX =
-                centX[ipsz + 1]
-                + (centX[ipsz] - centX[ipsz + 1])
-                * (zdelta * (z + 1) - locZ[j]) / zdelta;
-
-            depcentY =
-                centY[ipsz + 1]
-                + (centY[ipsz] - centY[ipsz + 1])
-                * (zdelta * (z + 1) - locZ[j]) / zdelta;
-
-            sigma2 =
-                cloud_sigma2[ipsz + 1]
-                + (cloud_sigma2[ipsz] - cloud_sigma2[ipsz + 1])
-                * (zdelta * (z + 1) - locZ[j]) / zdelta;
-
-            square_distance =
-                (depcentX - locX[j]) * (depcentX - locX[j])
-                + (depcentY - locY[j]) * (depcentY - locY[j]);
-
-#ifndef TEPHRA2
-            ttlmlD[j] +=
-                1.0f / (M_2PI * sigma2)
-                * exp(-square_distance / (2.0f * sigma2))
-                * massreleased[ips];
-#else
-            ttlmlD[j] +=
-                1.0f / (M_PI * sigma2)
-                * exp(-square_distance / sigma2)
-                * massreleased[ips];
-#endif
-        }
-    }
-} // End of 5.5.0
-
-__global__ void funcD01_direct_reduce(
     int locdim,
     int zdim,
     int sdim,
@@ -3985,7 +3915,11 @@ static void copy_location_data_to_device_buffers(Buffers *b, int locN)
  * Step 6c of calc_mass_loading:
  * Launch CUDA kernels for the current location chunk.
  *
- * This step computes mass loading in two stages:
+ * In normal mode, funcD01_direct computes total mass loading
+ * directly for each location using block-level reduction.
+ *
+ * In diagnostic mode, funcD01a and funcD01b are used to retain
+ * massloading_loc_source_phiD for decimal-phi/source debugging output.
  *
  * 1. funcD01a:
  *    Compute partial mass loading for each flattened element:
@@ -4030,7 +3964,7 @@ static void launch_mass_loading_kernels_buffers(
 		dim3 grid_reduce(locN);
 		size_t shmem = blocksize * sizeof(float);
 
-		funcD01_direct_reduce<<<grid_reduce, block, shmem>>>(
+		funcD01_direct<<<grid_reduce, block, shmem>>>(
 			locN, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
 			b->device.ttlmlD,
 			b->device.sourceZD,
@@ -4043,20 +3977,6 @@ static void launch_mass_loading_kernels_buffers(
 			b->device.massreleasedD
 		);
 
-		/*
-		dim3 grid_direct((locN + block.x - 1) / block.x, 1, 1);
-		funcD01_direct<<<grid_direct, block>>>(
-			locN, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
-			b->device.ttlmlD,
-			b->device.sourceZD,
-			b->device.centXD,
-			b->device.centYD,
-			b->device.sigsqD,
-			b->device.locXD,
-			b->device.locYD,
-			b->device.locZD,
-			b->device.massreleasedD
-		);*/
 		CUDA_KERNEL_CHECK();
 
 	} else {

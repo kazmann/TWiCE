@@ -3372,12 +3372,12 @@ __global__ void funcD01a(
             + (cloud_sigma2[ipsz] - cloud_sigma2[ipsz + 1])
             * (zdelta * (z + 1) - locZ[j]) / zdelta;
 
-        square_distance =
+        /*square_distance =
             pow((depcentX - locX[j]), 2)
-            + pow((depcentY - locY[j]), 2);
-		/*square_distance =
+            + pow((depcentY - locY[j]), 2);*/
+		square_distance =
             (depcentX - locX[j]) * (depcentX - locX[j])
-            + (depcentY - locY[j]) * (depcentY - locY[j]);*/
+            + (depcentY - locY[j]) * (depcentY - locY[j]);
 
         /*
          * Only sources above the current location (locZ[j]) contribute

@@ -1,4 +1,14 @@
 #!/bin/bash
+#
+# Validation script for CPU and GPU implementations of TWiCE.
+#
+# Before the first use, make this script executable:
+#   chmod +x doublerun.sh
+#
+# Then run:
+#   ./doublerun.sh
+#
+
 set -euo pipefail
 
 CC=cc
@@ -10,7 +20,7 @@ GPU_EXE=twiceg
 
 CONF=conf.conf
 WIND=wind.txt
-TOPO=./_topodata/ks_topo_utm1000.txt
+TOPO=./_topodata/ks_topo_utm500.txt
 
 OUTPUT=massloading.txt
 CPU_OUTPUT=massloading_cpu.txt

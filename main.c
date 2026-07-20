@@ -35,7 +35,7 @@
 } while (0)
 // end of CUDA Check
 
-#define TEPHRA2
+//#define TEPHRA2 //Interpolation Used in TEPHRA2
 //#define CUDA
 //#define TEST	//OUTPUT massloading_loc_source_phi.txt which is massloading contribution for each Location, particle Source, Phi in decimal
 

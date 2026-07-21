@@ -20,7 +20,7 @@ GPU_EXE=twiceg
 
 CONF=conf.conf
 WIND=wind.txt
-TOPO=./_topodata/ks_topo_utm500.txt
+TOPO=./_topodata/ks_topo_utm200.txt
 
 OUTPUT=massloading.txt
 CPU_OUTPUT=massloading_cpu.txt

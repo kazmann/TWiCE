@@ -2595,7 +2595,7 @@ void calculate_massloading(
 		// 4. Compute cloud center positions and dispersion from each source (F20)
 		calc_cloud_property(sourceX, sourceY, sourceZ, sourceRadius, ttlfalltime_phidec, ttldriftX_phidec, ttldriftY_phidec, cloud_center_x, cloud_center_y, cloud_sigma2);
 		
-		// 5. Convert particle release into per-source (s) representation
+		// 5. Output cloud property for 1 phi interval and set SDIMCUTOFF
 		write_cloud_trajectory_and_mass(phiint, cloud_center_x, cloud_center_y, cloud_sigma2, massreleased_per_ds_and_phidec, massreleased_per_ds);  // mass released for 1phi interval is also calculated from 0.1 phi interval data
 		get_sdimcutoff(cloud_sigma2, massreleased_per_ds, phiint);	// obtain SDIMCUTOFF
 		
@@ -2883,22 +2883,34 @@ void get_sdimcutoff(
     int phiint
 ){
     double estimated_contribution;
+	int iz;
 
+	iz = 0; //floor(VENT_ELEVATION / Z_DELTA);
     for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
         /*
          * Use phidec = 0 and z = 0 as representative values
          * for the current source point s.
          */
-        estimated_contribution =
-            massreleased_per_ds[s].mass_from_ds[phiint]
-            / cloud_sigma2[s * ZDIM];
+        estimated_contribution = massreleased_per_ds[s].mass_from_ds[phiint] / (M_2PI * cloud_sigma2[s * ZDIM + iz]);
 
-        if(estimated_contribution < MINIMUM_CONTRIBUTION * S_DELTA_FOR_FALL_CALC){
+        if(estimated_contribution < MINIMUM_CONTRIBUTION){
             SDIMCUTOFF = s;
             break;
         }
     }
 }	// END OF 5.2.4.
+
+/*
+void get_sdimcutoff(double *sigma_square, SEG *massreleased_str, int phidec){
+	double averagedmassloading;
+	for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
+		//printf("s=%d\tsegregated=%1.4e\tsigmasquare=%1.4e\n", s, massreleased_str[s].mass_from_ds[phidec], sigma_square[s * ZDIM]);
+		averagedmassloading = massreleased_str[s].mass_from_ds[phidec] / sigma_square[s * ZDIM] * PHIDECDIM;
+		if(averagedmassloading < MINIMUM_CONTRIBUTION * S_DELTA_FOR_FALL_CALC){SDIMCUTOFF = s; break;}
+		//if(massreleased_str[s].mass_from_ds[phidec] / S_DELTA_FOR_FALL_CALC < MINIMUM_CONTRIBUTION){SDIMCUTOFF = s; break;}
+	}
+}
+*/
 
 /* [5.3.1.]
  * Compute fall time and wind drift for a particle of a given grain size.

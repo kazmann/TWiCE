@@ -2887,7 +2887,7 @@ void get_sdimcutoff(
 
 	SDIMCUTOFF = SDIM_FOR_FALL_CALC;
 
-	iz = 0; //floor(VENT_ELEVATION / Z_DELTA);
+	iz = floor(VENT_ELEVATION / Z_DELTA);
     for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
         /*
          * Use phidec = 0 and z = 0 as representative values

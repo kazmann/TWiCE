@@ -14,7 +14,7 @@ GPU_EXE=twiceg
 
 CONF=conf.conf
 WIND=wind.txt
-TOPO=./_topodata/ks_topo_utm300.txt
+TOPO=./_topodata/ks_topo_utm100.txt
 
 OUTPUT=massloading.txt
 LOGFILE=benchmark.txt
@@ -55,6 +55,7 @@ do
     printf "Run %d : %.3f sec\n" "$i" "$elapsed"
 done
 
+<< EOF
 echo
 echo "=============================="
 echo "CPU benchmark (5 runs)"
@@ -74,6 +75,8 @@ do
 
     printf "Run %d : %.3f sec\n" "$i" "$elapsed"
 done
+
+EOF
 
 echo
 echo "========================================"

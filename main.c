@@ -246,13 +246,13 @@ int get_wind_line_number(FILE *in_wind);
 void get_sdimcutoff(double *cloud_sigma2, SEG *massreleased_per_ds_and_phidec, int phiint);
 
 void interpolate_atmosphere_and_wind(int windlinenum, double *h, double *atmT, double *atmP, double *windX, double *windY, double *wind_v, double *wind_dir, double *wind_tmp, double *wind_pres);
-void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime);
+void calc_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime);
 void store_profile_for_phi(int phiint, double *ttlfalltime, double *ttlfalltime_phiint);
-void drift_from_a_certain_source(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2);
+void calc_cloud_property(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2);
 void write_cloud_trajectory_and_mass(int phiint, double *cloud_center_x, double *cloud_center_y, double *sigma_squre, double *massreleased, SEG *seg);
 double calc_cloud_sigma2(double source_radius, double falltime);
-void compute_mass_release_along_plume(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased);
-double compute_total_released_mass(double *massreleased);
+void calc_SMD(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased);
+double calc_total_released_mass(double *massreleased);
 void set_coordinates_to_location_properties(DEP *l, double *locX, double *locY, double *locZ);
 void store_massloading_for_phi(int size, DEP *l, double *massloading);
 void store_total_massloading_and_mean_phi(DEP *l, double *ttlmassloading, double *cummassphi);
@@ -265,9 +265,9 @@ void set_source_points_on_plume(double *sourceX, double *sourceY, double *source
 void createisopachdata(DEP *l);
 void generate_isopach_analysis(DEP *l);
 void countmeandiameter(DEP *l);
-double compute_direction_from_vent(double x, double y);
+double calc_direction_from_vent(double x, double y);
 
-void compute_theoretical_particle_release(RELEASE *r);
+void calc_theoretical_particle_release(RELEASE *r);
 
 
 void read_wind_profile(FILE *f, double *h, double *v, double *d, double *t, double *p);
@@ -291,8 +291,8 @@ double calc_plume_heat_capacity(double);
 double calc_Cp0(void);			// Cp0 calc (eq. 20.5; in text between eq20 and 21)
 double calc_Tatm(double, int);
 double calc_Patm(double, int);
-double compute_pressure_gradient(double, double);	// pressure profile
-double compute_air_density(double, double);	// atmospheric density
+double calc_pressure_gradient(double, double);	// pressure profile
+double calc_air_density(double, double);	// atmospheric density
 double interpolate_wind_speed(double, int);
 double interpolate_wind_direction_across_360(double, int);
 
@@ -432,7 +432,7 @@ static void pack_fixed_data_buffers(Buffers *b,double *sourceZ, double *cloud_ce
 static void copy_fixed_data_to_device_buffers(Buffers *b);
 static void pack_location_data_buffers(Buffers *b, double *locX, double *locY, double *locZ, int loc0, int locN);
 static void prepare_mass_loading(Buffers *b, double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *massreleased, int chunk_locdim);
-static void compute_mass_loading(Buffers *b, double *locX, double *locY, double *locZ, double *ttlml, int loc0, int locN);
+static void calc_mass_loading(Buffers *b, double *locX, double *locY, double *locZ, double *ttlml, int loc0, int locN);
 static void cleanup_buffers(Buffers *b);
 
 void read_wind_file(const char *filename, int *windlinenum,
@@ -1386,7 +1386,7 @@ void initialize_simulation_state(
     clear_array(LOCDIM, ttlmassloading);
     clear_array(LOCDIM, cummassphi);
 
-    compute_theoretical_particle_release(r);
+    calc_theoretical_particle_release(r);
 }
 
 /* [2.3.1]
@@ -1396,7 +1396,7 @@ void initialize_simulation_state(
  * over decimal phi bins within each integer phi interval, then
  * multiplying by the total eruption mass.
  */
-void compute_theoretical_particle_release(RELEASE *r){
+void calc_theoretical_particle_release(RELEASE *r){
 	double phi;
 	double pdf_fraction = 0.0;
 
@@ -1551,7 +1551,7 @@ double plume_calculation(int imax, double *sourceX, double *sourceY, double *sou
 	p = calc_Patm(gz, total);
 	Cp0 = calc_Cp0();
 
-	rho_a = compute_air_density(p, ta);
+	rho_a = calc_air_density(p, ta);
 	n=n0;
 
 	Rg=Rg0;
@@ -1737,7 +1737,7 @@ void advance_plume_state_rk4(int total, double T){
 
 	/////////////////////////////////
 	// k1     ///////////////////////
-	//dp_over_ds1 = compute_pressure_gradient(p, ta);
+	//dp_over_ds1 = calc_pressure_gradient(p, ta);
 	dQ_over_ds1 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
 	dM_over_ds1 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
 	dtheta_over_ds1 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
@@ -1758,7 +1758,7 @@ void advance_plume_state_rk4(int total, double T){
 	n = func18(Q_tmp);				// calc n
 	p_tmp = calc_Patm(gz+ dz, total);
 	ta = calc_Tatm(gz+ dz, total);
-	rho_a_tmp = compute_air_density(p_tmp, ta);
+	rho_a_tmp = calc_air_density(p_tmp, ta);
 
 	Cp = calc_plume_heat_capacity(n);					// calc Cp
 	//printf("k1\n");
@@ -1775,7 +1775,7 @@ void advance_plume_state_rk4(int total, double T){
 
 	/////////////////////////////////
 	// k2     ///////////////////////
-	//dp_over_ds2 = compute_pressure_gradient(p_tmp, ta);
+	//dp_over_ds2 = calc_pressure_gradient(p_tmp, ta);
 	dQ_over_ds2 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
 	dM_over_ds2 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
 	dtheta_over_ds2 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
@@ -1796,7 +1796,7 @@ void advance_plume_state_rk4(int total, double T){
 	n = func18(Q_tmp);				// calc n
 	p_tmp = calc_Patm(gz+ dz, total);
 	ta = calc_Tatm(gz+ dz, total);
-	rho_a_tmp = compute_air_density(p_tmp, ta);
+	rho_a_tmp = calc_air_density(p_tmp, ta);
 
 	Cp = calc_plume_heat_capacity(n);					// calc Cp
 	//printf("k2\n");
@@ -1813,7 +1813,7 @@ void advance_plume_state_rk4(int total, double T){
 
 	/////////////////////////////////
 	// k3     ///////////////////////
-	//dp_over_ds3 = compute_pressure_gradient(p_tmp, ta);
+	//dp_over_ds3 = calc_pressure_gradient(p_tmp, ta);
 	dQ_over_ds3 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
 	dM_over_ds3 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
 	dtheta_over_ds3 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
@@ -1834,7 +1834,7 @@ void advance_plume_state_rk4(int total, double T){
 	n = func18(Q_tmp);				// calc n
 	p_tmp = calc_Patm(gz+ dz, total);
 	ta = calc_Tatm(gz+ dz, total);
-	rho_a_tmp = compute_air_density(p_tmp, ta);
+	rho_a_tmp = calc_air_density(p_tmp, ta);
 
 	Cp = calc_plume_heat_capacity(n);					// calc Cp
 	//printf("k3\n");
@@ -1851,7 +1851,7 @@ void advance_plume_state_rk4(int total, double T){
 
 	/////////////////////////////////
 	// k4     ///////////////////////
-	//dp_over_ds4 = compute_pressure_gradient(p_tmp, ta);
+	//dp_over_ds4 = calc_pressure_gradient(p_tmp, ta);
 	dQ_over_ds4 = func12(M_tmp, rho_a_tmp, rho_c_tmp, Q_tmp);
 	dM_over_ds4 = func13(rho_a_tmp, rho_c_tmp, M_tmp, theta_tmp, Q_tmp);
 	dtheta_over_ds4 = func14(M_tmp, Q_tmp, rho_a_tmp, rho_c_tmp, theta_tmp);
@@ -1890,7 +1890,7 @@ void advance_plume_state_rk4(int total, double T){
 	n = func18(Q);				// calc n
 	p = calc_Patm(gz, total);
 	ta = calc_Tatm(gz, total);
-	rho_a = compute_air_density(p, ta);
+	rho_a = calc_air_density(p, ta);
 
 	Cp = calc_plume_heat_capacity(n);					// calc Cp
 	//printf("k4\n");
@@ -2117,8 +2117,8 @@ void makewindstruct(int imax, double *alt, double *v, double *dir, double *temp,
 //   [4.1.1] interpolate_atmosphere_and_wind
 //       [4.1.1.1] calc_Tatm
 //       [4.1.1.2] calc_Patm
-//       [4.1.1.3] compute_air_density
-//       [4.1.1.4] compute_pressure_gradient
+//       [4.1.1.3] calc_air_density
+//       [4.1.1.4] calc_pressure_gradient
 //       [4.1.1.5] interpolate_wind_speed
 //       [4.1.1.6] interpolate_wind_direction_across_360
 
@@ -2318,7 +2318,7 @@ double calc_Patm(double h, int total){
  *
  *   rho = p / (R * T)
  */
-double compute_air_density(double p_tmp, double t_tmp){	// atmospheric density
+double calc_air_density(double p_tmp, double t_tmp){	// atmospheric density
 	double rho_tmp;
 
 	rho_tmp = p_tmp / (Ra * t_tmp);
@@ -2331,7 +2331,7 @@ double compute_air_density(double p_tmp, double t_tmp){	// atmospheric density
  *
  *   dp/ds = - (g * p) / (R * T)
  */
-double compute_pressure_gradient(double p_tmp, double t_tmp){	// atmospheric pressure
+double calc_pressure_gradient(double p_tmp, double t_tmp){	// atmospheric pressure
 	double dp_over_ds;
 
 	dp_over_ds = -1 * (GRAVITY * p_tmp) / (Ra * t_tmp);
@@ -2417,15 +2417,15 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
 // [5.1.2.] store_profile_for_phi
 
 // --- Release from plume ---
-// [5.2.1.]  compute_mass_release_along_plume
+// [5.2.1.]  calc_SMD (compute_mass_release_along_plume)
 // [5.2.1.1.] calc_pdf_fraction
-// [5.2.2.]  compute_total_released_mass
+// [5.2.2.]  calc_total_released_mass
 // [5.2.3.] write_cloud_trajectory_and_mass
 // [5.2.4.]  get_sdimcutoff
 
 // --- Diffusion and drift in the air ---
-// [5.3.1.]  compute_falltime_and_drift_profile
-// [5.3.2.]  drift_from_a_certain_source
+// [5.3.1.]  calc_falltime_and_drift_profile
+// [5.3.2.]  calc_cloud_property (drift_from_a_certain_source)
 // [5.3.3.]  calc_cloud_sigma2
 // [5.3.4.]  calc_particle_terminal_velocity
 
@@ -2446,7 +2446,7 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
 // [5.6.2.]  allocate_device_buffers_struct
 // [5.6.3.]  pack_fixed_data_buffers
 // [5.6.4.]  copy_fixed_data_to_device_buffers
-// [5.6.5.]  compute_mass_loading
+// [5.6.5.]  calc_mass_loading
 // [5.6.6.]  pack_location_data_buffers
 // [5.6.7.]  copy_location_data_to_device_buffers
 // [5.6.8.]  launch_mass_loading_kernels_buffers
@@ -2568,7 +2568,7 @@ void calculate_massloading(
 			*   driftY[z]      : horizontal drift in Y-direction [m]
 			*   ttlfalltime[z] : elapsed fall time to height z [s]
 			*/
-			compute_falltime_and_drift_profile(zmax, phidecimal, grainsize, h, atmP, atmT, windX, windY, driftX, driftY, ttlfalltime);
+			calc_falltime_and_drift_profile(zmax, phidecimal, grainsize, h, atmP, atmT, windX, windY, driftX, driftY, ttlfalltime);
 			
 			// 2. Store results for decimal phi classes (phidec) and integer phi classes
 			//    Map ttlfalltime[z] and driftXY[z] to ttlfalltime_phidec[z, phidec] and ttldriftXYphidec[z, phidec]
@@ -2589,11 +2589,12 @@ void calculate_massloading(
 				store_profile_for_phi(phiint, driftY, ttldriftY_phiint);
 			}
 			/* 3. Compute particle release (segregation) along the plume axis */
-			compute_mass_release_along_plume(zmax, phidecimal, phi, h, atmP, atmT, windX, windY, massreleased_per_ds_and_phidec);
+			calc_SMD(zmax, phidecimal, phi, h, atmP, atmT, windX, windY, massreleased_per_ds_and_phidec);
 		}// END OF DECIMAL PHI LOOP
 		
 		// 4. Compute cloud center positions and dispersion from each source (F20)
-		drift_from_a_certain_source(sourceX, sourceY, sourceZ, sourceRadius, ttlfalltime_phidec, ttldriftX_phidec, ttldriftY_phidec, cloud_center_x, cloud_center_y, cloud_sigma2);
+		calc_cloud_property(sourceX, sourceY, sourceZ, sourceRadius, ttlfalltime_phidec, ttldriftX_phidec, ttldriftY_phidec, cloud_center_x, cloud_center_y, cloud_sigma2);
+		
 		// 5. Convert particle release into per-source (s) representation
 		write_cloud_trajectory_and_mass(phiint, cloud_center_x, cloud_center_y, cloud_sigma2, massreleased_per_ds_and_phidec, massreleased_per_ds);  // mass released for 1phi interval is also calculated from 0.1 phi interval data
 		get_sdimcutoff(cloud_sigma2, massreleased_per_ds, phiint);	// obtain SDIMCUTOFF
@@ -2614,7 +2615,7 @@ void calculate_massloading(
 		}
 
 		r[phiint].phi = phiint + MAX_GRAINSIZE + 1;
-		r[phiint].actual = compute_total_released_mass(massreleased_per_ds_and_phidec);
+		r[phiint].actual = calc_total_released_mass(massreleased_per_ds_and_phidec);
 		
 		// print calculation status to standard output (per integer phi)
 		phisize = phiint + MAX_GRAINSIZE + 1;
@@ -2730,7 +2731,7 @@ void store_profile_for_phi(int phi, double *src, double *dst){
  * Output:
  * - massreleased[phidecimal][s] : released mass from source interval s
  */
-void compute_mass_release_along_plume(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased){
+void calc_SMD(int zmax, int phidecimal, double phi, double *h, double *atmP, double *atmT, double *windX, double *windY, double *massreleased){
 	                               //no need of phidecimal: phi already has decimal number.
 	double vphi, vw;
 	double beta;
@@ -2800,7 +2801,7 @@ double calc_pdf_fraction(double phi){				// calculate fraction of the particle s
  * Sum massreleased_per_ds_and_phidec over all (s, phidec),
  * but only for source indices s < SDIMCUTOFF.
  */
-double compute_total_released_mass(double *massreleased_per_ds_and_phidec){
+double calc_total_released_mass(double *massreleased_per_ds_and_phidec){
 	double totalofthefraction = 0.0;
 	int s;
 	
@@ -2917,7 +2918,7 @@ void get_sdimcutoff(
  *   between the top and bottom of each interval.
  * - Under TEPHRA2, the upper-level wind and terminal velocity are used.
  */
-void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime){
+void calc_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize, double *h, double *atmP, double *atmT, double *windX, double *windY, double *driftX, double *driftY, double *ttlfalltime){
 	// F10
 	
 #ifdef TEPHRA2
@@ -2927,7 +2928,7 @@ void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsi
 #endif
 
 	//printf("\n\nh\tp\tt\tair_density\tair_viscosity\tRe\ttermfallv\n");
-				// zmax is count for Ht
+				// zmax is index for Ht
 	v0 = calc_particle_terminal_velocity(h[zmax-1], grainsize, PUMICE_DENSITY, atmP[zmax-1], atmT[zmax-1]);
 	
 #ifdef TEPHRA2
@@ -2960,7 +2961,7 @@ void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsi
 } // END OF 5.3.1.
 
 /* [5.3.2.]
- * drift_from_a_certain_source (F20)
+ * calc_cloud_property (F20)
  * Compute the center position and dispersion of a particle cloud
  * released from each point along the plume axis.
  *
@@ -2975,19 +2976,19 @@ void compute_falltime_and_drift_profile(int zmax, int phidecimal, double grainsi
  * - share the same grain size (same phidec)
  * - are released from the same source point s
  */
-void drift_from_a_certain_source(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2){
+void calc_cloud_property(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2){
 	int s, z, phidec, idz, idz_s;
-	int z_source;		// z_source means interval count of z axis of just above the source height
+	int z_source;		// z_source means index of height just above the source height
 	double residue_up, fall_time_residue_up;
 	double falltime, ttldriftX, ttldriftY;
 
-	for(int idx = 0; idx < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx++){		// idx is count for driftXY_s and cloud_sigma2
+	for(int idx = 0; idx < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx++){		// idx is index for driftXY_s and cloud_sigma2
 		z = idx % ZDIM;
 		s = (idx / ZDIM) % SDIM_FOR_FALL_CALC;
 		phidec = idx / (ZDIM * SDIM_FOR_FALL_CALC);
 		z_source = ceil(source_height[s] / Z_DELTA); // source_height means source height
 		if(z < z_source){
-			idz = (phidec * ZDIM) + z; idz_s = (phidec * ZDIM) + z_source; // idz is count for driftXY and TotalFallTime
+			idz = (phidec * ZDIM) + z; idz_s = (phidec * ZDIM) + z_source; // idz is index for driftXY and TotalFallTime
 			residue_up = source_height[s] - (z_source - 1) * Z_DELTA;
 			fall_time_residue_up =  (TotalFallTime[idz_s - 1] - TotalFallTime[idz_s]) * residue_up / Z_DELTA;
 
@@ -3247,7 +3248,7 @@ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_ce
 		* Step 6 of calc_mass_loading:
 		* Per-chunk GPU processing pipeline.
 		*/
-		compute_mass_loading(&b, locX, locY, locZ, ttlml, loc0, locN);
+		calc_mass_loading(&b, locX, locY, locZ, ttlml, loc0, locN);
 	}
 		/* Step 7 Clean up*/
 		cleanup_buffers(&b);
@@ -3818,7 +3819,7 @@ static void copy_fixed_data_to_device_buffers(Buffers *b)
  *   be copied to the device before calling this function.
  * - This function operates only on a subset (chunk) of locations.
  */
-static void compute_mass_loading(
+static void calc_mass_loading(
     Buffers *b,
     double *locX,
     double *locY,
@@ -4129,7 +4130,7 @@ void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_cente
 	//outfile = fopen(string, "w");
 	//fprintf(outfile, "idx\ti\tj\tphisize\tdepcentX\tdepcentY\tsourceZ\tdep-locX\tdep-locY\tsigma2\tsquare_distance\tmassloading\tsourcemagnitude\n");
 	
-	for(int idx = 0; idx < PHIDECDIM * SDIMCUTOFF * LOCDIM; idx++){ // idx is count for location(j) - plumelength(s cutoff) - grainsize(phidec) order
+	for(int idx = 0; idx < PHIDECDIM * SDIMCUTOFF * LOCDIM; idx++){ // idx is index for location(j) - plumelength(s cutoff) - grainsize(phidec) order
 		j = idx / (PHIDECDIM * SDIMCUTOFF);
 		s = (idx / PHIDECDIM) % SDIMCUTOFF;
 		phidec = idx % PHIDECDIM;
@@ -4353,7 +4354,7 @@ void generate_isopach_analysis(DEP *l){
 				l2[j2].x = l[j].x;
 				l2[j2].y = l[j].y;
 				l2[j2].z = l[j].z;
-				dir = compute_direction_from_vent(l2[j2].x, l2[j2].y);
+				dir = calc_direction_from_vent(l2[j2].x, l2[j2].y);
 				l2[j2].dist = l[j].dist;
 				l2[j2].ttlmassloading = l[j].ttlmassloading;
 				l2[j2].smallerthan1mm = l[j].smallerthan1mm;
@@ -4407,7 +4408,7 @@ void generate_isopach_analysis(DEP *l){
   			intSqrtA = (l2[j].dep[1] - l2[j + 1].dep[1]) * ratio + l2[j + 1].dep[1];
   			intx = (l2[j].x - l2[j + 1].x) * ratio + l2[j + 1].x;
   			inty = (l2[j].y - l2[j + 1].y) * ratio + l2[j + 1].y;
-  			dir = compute_direction_from_vent(l2[j].x, l2[j].y);
+  			dir = calc_direction_from_vent(l2[j].x, l2[j].y);
   			intdist  = sqrt(intx * intx + inty * inty);
   			 
   			if(j==0){
@@ -4485,7 +4486,7 @@ void generate_isopach_analysis(DEP *l){
 			intS = (l2[j+1].ttlmassloading - l2[j].ttlmassloading) * ratio + l2[j].ttlmassloading;
 			intx = (l2[j + 1].x - l2[j].x) * ratio + l2[j].x;
 			inty = (l2[j + 1].y - l2[j].y) * ratio + l2[j].y;
-			dir = compute_direction_from_vent(l2[j].x, l2[j].y);
+			dir = calc_direction_from_vent(l2[j].x, l2[j].y);
 			intdist  = sqrt(intx * intx + inty * inty);
 			 
 			if(j==0){
@@ -4848,7 +4849,7 @@ void write_plume_files(
 // [8.9.]  countmeandiameter
 // [8.10.] compare_ttlmassloading
 // [8.11.] compare_Md
-// [8.12.] compute_direction_from_vent
+// [8.12.] calc_direction_from_vent
 
 
 /*
@@ -5022,7 +5023,7 @@ void countmeandiameter(DEP *l){
 			}
 			if(distance < l[j].dist){
 				distance = l[j].dist; x = l[j].x; y = l[j].y;
-				dir = compute_direction_from_vent(x, y);
+				dir = calc_direction_from_vent(x, y);
 			}
 			if(phi > 5){break;}
 			if(l[j].meandiameter > phi){
@@ -5076,7 +5077,7 @@ int compare_Md(const void *a, const void *b){
  * Angle is measured clockwise from north (y-axis),
  * consistent with typical geographic convention.
  */
-double compute_direction_from_vent(double x, double y){
+double calc_direction_from_vent(double x, double y){
     double dir;
 
     dir = atan2(x, y) * 180.0 / M_PI;

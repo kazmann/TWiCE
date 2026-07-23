@@ -2885,6 +2885,8 @@ void get_sdimcutoff(
     double estimated_contribution;
 	int iz;
 
+	SDIMCUTOFF = SDIM_FOR_FALL_CALC;
+
 	iz = 0; //floor(VENT_ELEVATION / Z_DELTA);
     for(int s = 0; s < SDIM_FOR_FALL_CALC; s++){
         /*
@@ -3724,25 +3726,44 @@ static void pack_fixed_data_buffers(
     double *cloud_center_y,
     double *cloud_sigma2,
     double *massreleased
-){                                                 
-	/*
-	* CUDA device memory is handled as linear memory.
-	* Therefore, multi-dimensional indices are flattened into
-	* one-dimensional array indices before data transfer to GPU.
-	*/
-
-    for(int i = 0; i < SDIMCUTOFF; i++){
-        b->host.sourceZF[i] = (float)sourceZ[i];
+){
+    for (int s = 0; s < SDIMCUTOFF; s++) {
+        b->host.sourceZF[s] = (float)sourceZ[s];
     }
 
-    for(size_t ipszc = 0; ipszc < b->PSZ; ipszc++){
-        b->host.centXF[ipszc] = (float)cloud_center_x[ipszc];
-        b->host.centYF[ipszc] = (float)cloud_center_y[ipszc];
-        b->host.sigsqF[ipszc] = (float)cloud_sigma2[ipszc];
+    for (int phidec = 0; phidec < PHIDECDIM; phidec++) {
+        for (int s = 0; s < SDIMCUTOFF; s++) {
+            for (int z = 0; z < ZDIM; z++) {
+
+				size_t src =
+					(size_t)phidec * SDIM_FOR_FALL_CALC * ZDIM
+					+ (size_t)s * ZDIM
+					+ z;
+
+				size_t dst =
+					(size_t)phidec * SDIMCUTOFF * ZDIM
+					+ (size_t)s * ZDIM
+					+ z;
+
+                b->host.centXF[dst] = (float)cloud_center_x[src];
+                b->host.centYF[dst] = (float)cloud_center_y[src];
+                b->host.sigsqF[dst] = (float)cloud_sigma2[src];
+            }
+        }
     }
 
-    for(int ipsc = 0; ipsc < SDIMCUTOFF * PHIDECDIM; ipsc++){
-        b->host.massreleasedF[ipsc] = (float)massreleased[ipsc];
+    for (int phidec = 0; phidec < PHIDECDIM; phidec++) {
+        for (int s = 0; s < SDIMCUTOFF; s++) {
+
+            size_t src =
+                (size_t)phidec * SDIM_FOR_FALL_CALC + s;
+
+            size_t dst =
+                (size_t)phidec * SDIMCUTOFF + s;
+
+            b->host.massreleasedF[dst] =
+                (float)massreleased[src];
+        }
     }
 }
 /* End of Step 4*/

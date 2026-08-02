@@ -8,7 +8,7 @@ nvcc -x cu -DCUDA main.c -o twiceg
 start=$(date +%s.%N)
 
 #./twice conf.conf wind.txt topo.txt
-./twiceg conf.conf wind.txt ./_topodata/ks_topo_utm1000.txt
+./twiceg conf.conf wind.txt ./_topodata/ks_topo_utm200.txt
 
 end=$(date +%s.%N)
 
@@ -24,4 +24,4 @@ else
 fi
 EOF
 
-printf "Elapsed time: %.3f sec\n" "$elapsed"
+printf "Elapsed time: %.3f sec\n" "$elapsed"koro301

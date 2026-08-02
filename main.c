@@ -620,6 +620,17 @@ int main(int argc, char *argv[]) {
 	SDIM_FOR_FALL_CALC = S_MAX / S_DELTA_FOR_FALL_CALC; // dimension of source
 	SDIMCUTOFF = SDIM_FOR_FALL_CALC;
 
+	if (S_DELTA_FOR_FALL_CALC < S_DELTA_FOR_PLUME_CALC) {
+    fprintf(
+        stderr,
+        "Error: S_DELTA_FOR_FALL_CALC (%g m) must be greater than or equal to "
+        "S_DELTA_FOR_PLUME_CALC (%g m).\n",
+        (double)S_DELTA_FOR_FALL_CALC,
+        (double)S_DELTA_FOR_PLUME_CALC
+    );
+    exit(EXIT_FAILURE);
+}
+
 	/* 2.2. Obtain plume trajectory and set particle sources on it */
 	double *plume_trajX, *plume_trajY, *plume_trajZ, *plume_trajR, *plume_trajT;
 	double *sourceX, *sourceY, *sourceZ, *sourceRadius, *sourceT;

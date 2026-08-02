@@ -26,6 +26,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 /* CUDA Check*/
 #include <cuda_runtime.h>
 
@@ -2068,23 +2072,23 @@ double func19(double n_tmp){
  */
 void set_source_points_on_plume(double *sourceX, double *sourceY, double *sourceZ, double *sourceR, double *sourceT, double *plume_trajX, double *plume_trajY, double *plume_trajZ, double *plume_trajR, double *plume_trajT){
 	double r = 0.0;
-	for(int j = 0; j < SDIM_FOR_FALL_CALC; j++){
-		for(int i = 0; i < SDIM_FOR_PLUME_CALC + 1; i++){
-			if((double)(j + 1) * S_DELTA_FOR_FALL_CALC == (double)i * S_DELTA_FOR_PLUME_CALC){
-				sourceX[j] = plume_trajX[i-1]; sourceY[j] = plume_trajY[i-1]; sourceZ[j] = plume_trajZ[i-1]; sourceR[j] = plume_trajR[i-1]; sourceT[j] = plume_trajT[i-1];
-				//printf("LINE481 i=%d\tj=%d\tr=0.0\n", i, j);
+	for(int js = 0; js < SDIM_FOR_FALL_CALC; js++){
+		for(int jp = 0; jp < SDIM_FOR_PLUME_CALC; jp++){
+
+			double S_source = (js + 1) * S_DELTA_FOR_FALL_CALC; double S_plume = (jp + 1) * S_DELTA_FOR_PLUME_CALC; double S_plume_next = (jp + 2) * S_DELTA_FOR_PLUME_CALC;
+
+			if(S_source == S_plume){
+				sourceX[js] = plume_trajX[jp]; sourceY[js] = plume_trajY[jp]; sourceZ[js] = plume_trajZ[jp]; sourceR[js] = plume_trajR[jp]; sourceT[js] = plume_trajT[jp];
 				break;
-			}else if((double)(j + 1) * S_DELTA_FOR_FALL_CALC < (double)i * S_DELTA_FOR_PLUME_CALC && (double)(j + 1) * S_DELTA_FOR_FALL_CALC > (double)(i - 1) * S_DELTA_FOR_PLUME_CALC){
-				r = (double)(j + 1) * S_DELTA_FOR_FALL_CALC - (double)(i - 1) * S_DELTA_FOR_PLUME_CALC;
-				r = r / ((double)i * S_DELTA_FOR_PLUME_CALC - (double)(i - 1) * S_DELTA_FOR_PLUME_CALC);
-				i--;
-				sourceX[j] = plume_trajX[i - 1] + r * (plume_trajX[i] - plume_trajX[i - 1]);
-				sourceY[j] = plume_trajY[i - 1] + r * (plume_trajY[i] - plume_trajY[i - 1]);
-				sourceZ[j] = plume_trajZ[i - 1] + r * (plume_trajZ[i] - plume_trajZ[i - 1]);
-				sourceR[j] = plume_trajR[i - 1] + r * (plume_trajR[i] - plume_trajR[i - 1]);
-				sourceT[j] = plume_trajT[i - 1] + r * (plume_trajT[i] - plume_trajT[i - 1]);
-				i++;
-				//printf("LINE491 i=%d\tj=%d\tr=%1.4f\n", i, j, r);
+			}else if(S_plume_next > S_source && S_source > S_plume){
+				r = S_source - S_plume;
+				r = r / S_DELTA_FOR_PLUME_CALC;
+				sourceX[js] = plume_trajX[jp] + r * (plume_trajX[jp + 1] - plume_trajX[jp]);
+				sourceY[js] = plume_trajY[jp] + r * (plume_trajY[jp + 1] - plume_trajY[jp]);
+				sourceZ[js] = plume_trajZ[jp] + r * (plume_trajZ[jp + 1] - plume_trajZ[jp]);
+				sourceR[js] = plume_trajR[jp] + r * (plume_trajR[jp + 1] - plume_trajR[jp]);
+				sourceT[js] = plume_trajT[jp] + r * (plume_trajT[jp + 1] - plume_trajT[jp]);
+				//printf("LINE491 i=%d\tj=%d\tr=%1.4f\n", jp, js, r);
 				break;
 			}
 		}

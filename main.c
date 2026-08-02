@@ -1,4 +1,4 @@
-// TWiCE; Tephra fall simulator for Windy Condition Eruption
+// TWiCE; Tephra simulation in Windy conditions with CUDA Execution
 // Developed by K. Mannen in 2022
 // Modified in 20230714 TO ASSIGN kw and ks from configfile
 // Modified on 20230909 TO CALCULATE PLUME TRAJECTORY USING INDEPENDENT ds
@@ -9,6 +9,16 @@
 // Modified on 20240729 OUTPUT particle_segregation_##.txt, which depict amount of segregation from each position along plume axis s and phidec sizeclass
 // 20241119 Typo correction 255 -> 225 in L1518
 // 20260426 Starting Add Comments
+// 20260720 unified funcD01 / CPU-GPU compatible code / Speed up.
+
+//
+// How to compile
+// CPU
+// cc main.c -o twicec -lm
+//
+// GPU
+// nvcc -x cu -DCUDA main.c -o twiceg
+//
 #include <stdio.h>
 #include <math.h>
 #include <errno.h>

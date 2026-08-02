@@ -3033,10 +3033,10 @@ void calc_cloud_property(double *source_x, double *source_y, double *source_heig
 	double residue_up, fall_time_residue_up;
 	double falltime, ttldriftX, ttldriftY;
 
-	for(int idx = 0; idx < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx++){		// idx is index for driftXY_s and cloud_sigma2
-		z = idx % ZDIM;
-		s = (idx / ZDIM) % SDIM_FOR_FALL_CALC;
-		phidec = idx / (ZDIM * SDIM_FOR_FALL_CALC);
+	for(int idx_psj = 0; idx_psj < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx_psj++){		// idx_psj is index for driftXY_s and cloud_sigma2
+		z = idx_psj % ZDIM;
+		s = (idx_psj / ZDIM) % SDIM_FOR_FALL_CALC;
+		phidec = idx_psj / (ZDIM * SDIM_FOR_FALL_CALC);
 		z_source = ceil(source_height[s] / Z_DELTA); // source_height means source height
 		if(z < z_source){
 			idx_fallingcloud = (phidec * ZDIM) + z; idx_source = (phidec * ZDIM) + z_source; // idx_fallingcloud is index for driftXY and TotalFallTime
@@ -3050,9 +3050,9 @@ void calc_cloud_property(double *source_x, double *source_y, double *source_heig
 
 			//printf("phidec=%d\ts=%d\tz=%d\tdrftX=%1.4f\tttldrftX = %1.4f\n", phidec, s, z, driftX[idx_fallingcloud], ttldriftX);
 
-			cloud_center_x[idx] = source_x[s] + ttldriftX;
-			cloud_center_y[idx] = source_y[s] + ttldriftY;
-			cloud_sigma2[idx] = calc_cloud_sigma2(sourceRadius[s] * PLUME_RADIUS_CORRECTION, falltime); // F21
+			cloud_center_x[idx_psj] = source_x[s] + ttldriftX;
+			cloud_center_y[idx_psj] = source_y[s] + ttldriftY;
+			cloud_sigma2[idx_psj] = calc_cloud_sigma2(sourceRadius[s] * PLUME_RADIUS_CORRECTION, falltime); // F21
 		}
 	}
 } // End of the function (F20) [5.3.2.]
@@ -4233,15 +4233,15 @@ void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_cente
 // Calculate mass loading on a certain grain size on a certain point on the ground.
 // All grainsizes and sources are summed up from the "elements", which is calculated by D01a.
 void calc_mass_loading_location(int phiint, double *massloading_loc_source_phi, double *massloading, double *ttl, double *cummassphi){
-	int idx;
+	int idx_psj;
 	double phi;
 
 	for(int j = 0; j < LOCDIM; j++){
-		for(idx = PHIDECDIM * SDIMCUTOFF * j; idx < PHIDECDIM * SDIMCUTOFF * (j + 1); idx++){
+		for(idx_psj = PHIDECDIM * SDIMCUTOFF * j; idx_psj < PHIDECDIM * SDIMCUTOFF * (j + 1); idx_psj++){
 			phi = phiint + MAX_GRAINSIZE + 1; // - phidec * INTERVAL_DECIMAL_PHI;
-			massloading[j] += massloading_loc_source_phi[idx];
-			ttl[j] += massloading_loc_source_phi[idx];
-			cummassphi[j] += massloading_loc_source_phi[idx] * phi;
+			massloading[j] += massloading_loc_source_phi[idx_psj];
+			ttl[j] += massloading_loc_source_phi[idx_psj];
+			cummassphi[j] += massloading_loc_source_phi[idx_psj] * phi;
 		}
 	}
 	//printf("LINE302 j = %d\n", j);
@@ -4717,7 +4717,7 @@ void write_massloading_per_phidec_at_locations(
     int phiint,
     double *massloading_loc_source_phi
 ){
-    int idx;
+    int idx_phidec;
     int phi;
     char string[64];
     FILE *outfile;
@@ -4742,8 +4742,8 @@ void write_massloading_per_phidec_at_locations(
 
         for(int s = 0; s < SDIMCUTOFF; s++){
             for(int phidec = 0; phidec < PHIDECDIM; phidec++){
-                idx = ((j * SDIMCUTOFF) + s) * PHIDECDIM + phidec;
-                massloading_each_phidec[phidec] += massloading_loc_source_phi[idx];
+                idx_phidec = ((j * SDIMCUTOFF) + s) * PHIDECDIM + phidec;
+                massloading_each_phidec[phidec] += massloading_loc_source_phi[idx_phidec];
             }
         }
 

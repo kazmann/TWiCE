@@ -912,32 +912,49 @@ void read_wind_profile(FILE *f, double *height, double *speed, double *dir, doub
 	while(NULL != fgets(line, 1000, f)){
 		if(line[0] == '#')continue;
 		else{
-		while(ret=sscanf(line,
-		"%lf %lf %lf %lf %lf",
-		&wind_height,
-		&wind_speed,
-		&wind_dir,
-		&wind_temp,
-		&wind_pres), ret != 5){}
+			ret = sscanf(line,
+			"%lf %lf %lf %lf %lf",
+			&wind_height,
+			&wind_speed,
+			&wind_dir,
+			&wind_temp,
+			&wind_pres);
+
+			if(ret != 5){
+				fprintf(stderr, "Invalid wind profile:\n%s", line);
+				exit(EXIT_FAILURE);
+			}
 		}
-		if(wind_height == 0 && i==0){
-			height[i] = wind_height;
-			speed[i] = wind_speed;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp;
-			atm_pres[i] = wind_pres;
-		}else if(wind_height > 0 && i==0){
-			height[i] = 0;
-			speed[i] = 0;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp + 0.0065 * wind_height;
-			atm_pres[i] = wind_pres + 0.12 * wind_height;
-			i++;
-			height[i] = wind_height;
-			speed[i] = wind_speed;
-			dir[i] = wind_dir;
-			atm_temp[i] = wind_temp;
-			atm_pres[i] = wind_pres;
+		/*
+		 * The wind profile must start at sea level (0 m).
+		 * If the input file already contains a 0 m record, it is used.
+		 * Otherwise, a synthetic 0 m record is inserted by extrapolating
+		 * temperature and pressure from the first level, while assuming
+		 * zero wind speed and the same wind direction.
+		 */
+		if(i==0){
+			if(wind_height == 0){
+				height[i] = wind_height;
+				speed[i] = wind_speed;
+				dir[i] = wind_dir;
+				atm_temp[i] = wind_temp;
+				atm_pres[i] = wind_pres;
+			}else if(wind_height > 0){
+				/* Store interpolated zero level. */
+				height[i] = 0;
+				speed[i] = 0;
+				dir[i] = wind_dir;
+				atm_temp[i] = wind_temp + 0.0065 * wind_height;
+				atm_pres[i] = wind_pres + 0.12 * wind_height;
+
+				/* Store the first observed level. */
+				i++;
+				height[i] = wind_height;
+				speed[i] = wind_speed;
+				dir[i] = wind_dir;
+				atm_temp[i] = wind_temp;
+				atm_pres[i] = wind_pres;
+			}
 		}else{
 			height[i] = wind_height;
 			speed[i] = wind_speed;
@@ -1084,11 +1101,6 @@ int init_globals(char *config_file) {
   char *token;
 
   in_config = fopen(config_file, "r");
-  	if (!config_file) {
-		fprintf(stderr, "Error: cannot open config file: %s\n", config_file);
-		perror("fopen");
-		exit(EXIT_FAILURE);
-	}
 
   if (in_config == NULL) {
     fprintf(stderr,
@@ -1204,7 +1216,7 @@ int init_globals(char *config_file) {
       WRITE_COLUMN_FILES = strtod(token, NULL);
       if(WRITE_CONF) fprintf(stderr, "WRITE_COLUMN_FILES = %d\n", WRITE_COLUMN_FILES);
     }
-    else if (!strncmp(token, "WRITE_DECIMAL_MASSLOADING", strlen("WRITE_COLUMN_FILES"))) {
+    else if (!strncmp(token, "WRITE_DECIMAL_MASSLOADING", strlen("WRITE_DECIMAL_MASSLOADING"))) {
       token = strtok_r(NULL, space, ptr1);
       WRITE_DECIMAL_MASSLOADING = strtod(token, NULL);
       if(WRITE_CONF) fprintf(stderr, "WRITE_DECIMAL_MASSLOADING = %d\n", WRITE_DECIMAL_MASSLOADING);
@@ -2092,8 +2104,7 @@ void set_source_points_on_plume(double *sourceX, double *sourceY, double *source
 				sourceX[js] = plume_trajX[jp]; sourceY[js] = plume_trajY[jp]; sourceZ[js] = plume_trajZ[jp]; sourceR[js] = plume_trajR[jp]; sourceT[js] = plume_trajT[jp];
 				break;
 			}else if(S_plume_next > S_source && S_source > S_plume){
-				r = S_source - S_plume;
-				r = r / S_DELTA_FOR_PLUME_CALC;
+				r = (S_source - S_plume) / S_DELTA_FOR_PLUME_CALC;
 				sourceX[js] = plume_trajX[jp] + r * (plume_trajX[jp + 1] - plume_trajX[jp]);
 				sourceY[js] = plume_trajY[jp] + r * (plume_trajY[jp + 1] - plume_trajY[jp]);
 				sourceZ[js] = plume_trajZ[jp] + r * (plume_trajZ[jp + 1] - plume_trajZ[jp]);

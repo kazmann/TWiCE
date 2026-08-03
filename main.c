@@ -3033,13 +3033,15 @@ void calc_cloud_property(double *source_x, double *source_y, double *source_heig
 	double residue_up, fall_time_residue_up;
 	double falltime, ttldriftX, ttldriftY;
 
-	for(int idx_psj = 0; idx_psj < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx_psj++){		// idx_psj is index for driftXY_s and cloud_sigma2
+	for(int idx_psj = 0; idx_psj < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx_psj++){		// idx_psj (phidec, source, location) is index for driftXY_s and cloud_sigma2
 		z = idx_psj % ZDIM;
 		s = (idx_psj / ZDIM) % SDIM_FOR_FALL_CALC;
 		phidec = idx_psj / (ZDIM * SDIM_FOR_FALL_CALC);
 		z_source = ceil(source_height[s] / Z_DELTA); // source_height means source height
 		if(z < z_source){
-			idx_fallingcloud = (phidec * ZDIM) + z; idx_source = (phidec * ZDIM) + z_source; // idx_fallingcloud is index for driftXY and TotalFallTime
+			idx_fallingcloud = (phidec * ZDIM) + z;
+			idx_source = (phidec * ZDIM) + z_source; // idx_fallingcloud is index for driftXY and TotalFallTime
+			
 			residue_up = source_height[s] - (z_source - 1) * Z_DELTA;
 			fall_time_residue_up =  (TotalFallTime[idx_source - 1] - TotalFallTime[idx_source]) * residue_up / Z_DELTA;
 
@@ -3391,8 +3393,8 @@ __global__ void funcD01_direct(
 
         int z = (int)(locZ[j] / zdelta);
 
-        int idx_psz = flatten_psz(phidec, s, z, sdim, zdim);
-        int idx_ps  = flatten_ps(phidec, s, sdim);
+        int idx_psz = flatten_psz(phidec, s, z, sdim, zdim);	// idx (phidec, s, z)
+        int idx_ps  = flatten_ps(phidec, s, sdim);				// idx (phidec, s)
 
         float depcentX =
             centX[idx_psz + 1]
@@ -4040,7 +4042,7 @@ static void launch_mass_loading_kernels_buffers(
     dim3 grid((N + block.x - 1) / block.x, 1, 1);
 
 	if (!(WRITE_DECIMAL_MASSLOADING)) {
-		int blocksize = 128;
+		int blocksize = 512;
 		dim3 block(blocksize);
 		dim3 grid_reduce(locN);
 		size_t shmem = blocksize * sizeof(float);

@@ -3033,10 +3033,10 @@ void calc_cloud_property(double *source_x, double *source_y, double *source_heig
 	double residue_up, fall_time_residue_up;
 	double falltime, ttldriftX, ttldriftY;
 
-	for(int idx_pij = 0; idx_pij < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx_pij++){		// idx_pij (phidec, source, location) is index for driftXY_s and cloud_sigma2
-		k = idx_pij % ZDIM;
-		i = (idx_pij / ZDIM) % SDIM_FOR_FALL_CALC;
-		phidec = idx_pij / (ZDIM * SDIM_FOR_FALL_CALC);
+	for(int idx_pik = 0; idx_pik < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx_pik++){		// idx_pik (phidec, source, level) is index for driftXY_s and cloud_sigma2
+		k = idx_pik % ZDIM;
+		i = (idx_pik / ZDIM) % SDIM_FOR_FALL_CALC;
+		phidec = idx_pik / (ZDIM * SDIM_FOR_FALL_CALC);
 		k_source = ceil(source_height[i] / Z_DELTA); // source_height means source height
 		if(k < k_source){
 			idx_fallingcloud = (phidec * ZDIM) + k;
@@ -3052,9 +3052,9 @@ void calc_cloud_property(double *source_x, double *source_y, double *source_heig
 
 			//printf("phidec=%d\ts=%d\tz=%d\tdrftX=%1.4f\tttldrftX = %1.4f\n", phidec, s, z, driftX[idx_fallingcloud], ttldriftX);
 
-			cloud_center_x[idx_pij] = source_x[i] + ttldriftX;
-			cloud_center_y[idx_pij] = source_y[i] + ttldriftY;
-			cloud_sigma2[idx_pij] = calc_cloud_sigma2(sourceRadius[i] * PLUME_RADIUS_CORRECTION, falltime); // F21
+			cloud_center_x[idx_pik] = source_x[i] + ttldriftX;
+			cloud_center_y[idx_pik] = source_y[i] + ttldriftY;
+			cloud_sigma2[idx_pik] = calc_cloud_sigma2(sourceRadius[i] * PLUME_RADIUS_CORRECTION, falltime); // F21
 		}
 	}
 } // End of the function (F20) [5.3.2.]

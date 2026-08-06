@@ -2469,8 +2469,8 @@ double interpolate_wind_direction_across_360(double h, int total){	//return wind
 // [5.4.]  calc_mass_loading
 
 // --- Flatten ---
-// [5.4.1] flatten_ps
-// [5.4.2] flatten_psz
+// [5.4.1] flatten_pi
+// [5.4.2] flatten_pik
 
 // --- CUDA backend ---
 // [5.5.0.]  funcD01_direct	merged funcD01a and funcD01b
@@ -3027,22 +3027,22 @@ void calc_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize,
  * - are released from the same source point s
  */
 void calc_cloud_property(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2){
-	int s, z, phidec;
-	int z_source;								// z_source means index of height just above the source height
+	int i, k, phidec;							// i and k are index for source and level
+	int k_source;								// k_source means index of height just above the source height
 	int idx_fallingcloud, idx_source;			// idx means flattened index
 	double residue_up, fall_time_residue_up;
 	double falltime, ttldriftX, ttldriftY;
 
-	for(int idx_psj = 0; idx_psj < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx_psj++){		// idx_psj (phidec, source, location) is index for driftXY_s and cloud_sigma2
-		z = idx_psj % ZDIM;
-		s = (idx_psj / ZDIM) % SDIM_FOR_FALL_CALC;
-		phidec = idx_psj / (ZDIM * SDIM_FOR_FALL_CALC);
-		z_source = ceil(source_height[s] / Z_DELTA); // source_height means source height
-		if(z < z_source){
-			idx_fallingcloud = (phidec * ZDIM) + z;
-			idx_source = (phidec * ZDIM) + z_source; // idx_fallingcloud is index for driftXY and TotalFallTime
+	for(int idx_pij = 0; idx_pij < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx_pij++){		// idx_pij (phidec, source, location) is index for driftXY_s and cloud_sigma2
+		k = idx_pij % ZDIM;
+		i = (idx_pij / ZDIM) % SDIM_FOR_FALL_CALC;
+		phidec = idx_pij / (ZDIM * SDIM_FOR_FALL_CALC);
+		k_source = ceil(source_height[i] / Z_DELTA); // source_height means source height
+		if(k < k_source){
+			idx_fallingcloud = (phidec * ZDIM) + k;
+			idx_source = (phidec * ZDIM) + k_source; // idx_fallingcloud is index for driftXY and TotalFallTime
 			
-			residue_up = source_height[s] - (z_source - 1) * Z_DELTA;
+			residue_up = source_height[i] - (k_source - 1) * Z_DELTA;
 			fall_time_residue_up =  (TotalFallTime[idx_source - 1] - TotalFallTime[idx_source]) * residue_up / Z_DELTA;
 
 			falltime = TotalFallTime[idx_fallingcloud] - TotalFallTime[idx_source - 1] + fall_time_residue_up;
@@ -3052,9 +3052,9 @@ void calc_cloud_property(double *source_x, double *source_y, double *source_heig
 
 			//printf("phidec=%d\ts=%d\tz=%d\tdrftX=%1.4f\tttldrftX = %1.4f\n", phidec, s, z, driftX[idx_fallingcloud], ttldriftX);
 
-			cloud_center_x[idx_psj] = source_x[s] + ttldriftX;
-			cloud_center_y[idx_psj] = source_y[s] + ttldriftY;
-			cloud_sigma2[idx_psj] = calc_cloud_sigma2(sourceRadius[s] * PLUME_RADIUS_CORRECTION, falltime); // F21
+			cloud_center_x[idx_pij] = source_x[i] + ttldriftX;
+			cloud_center_y[idx_pij] = source_y[i] + ttldriftY;
+			cloud_sigma2[idx_pij] = calc_cloud_sigma2(sourceRadius[i] * PLUME_RADIUS_CORRECTION, falltime); // F21
 		}
 	}
 } // End of the function (F20) [5.3.2.]
@@ -3126,7 +3126,7 @@ double calc_particle_terminal_velocity(double h, double ashdiam, double part_den
   	air_density = 1.293 * exp(-h / 8200);
   	air_viscosity = 0.000018325;
 #endif
-	/*  Based on Bonadonna and Phillidx_ps (2003) JGR 108, 2034. Eq. A4
+	/*  Based on Bonadonna and Phillips (2003) JGR 108, 2034. Eq. A4
     	vtl is terminal velocity (m/s) in laminar regime Re < 6
     	vti is terminal velocity (m/s) in intermediate regime 6 <Re <500
     	vtt is terminal velocity (m/s) in turbulent regime Re > 500*/
@@ -3218,11 +3218,11 @@ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_ce
 	* Multi-dimensional indices (phidec, source, z) are mapped to
  	* 1D arrays for GPU memory access (CUDA global memory is linear).
 	*
-	* idx_psz : index for (phidec, source, height_interval)
-	* idx_ps  : index for (phidec, source)
+	* idx_pik : index for (phidec[p], source[i], height_interval[k])
+	* idx_pi  : index for (phidec[p], source[i])
 	*/
-	//int idx_psz;
-	//int idx_ps;
+	//int idx_pik;
+	//int idx_pi;
 
 	PSZ = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZ = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
 	LSP = (size_t)chunk_locdim * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
@@ -3329,7 +3329,7 @@ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_ce
  */
  
 static HOST_DEVICE inline int
-flatten_psz(
+flatten_pik(
 	int phidec, int s, int z, int sdim, int zdim)
 {
     return phidec * sdim * zdim + s * zdim + z;
@@ -3347,7 +3347,7 @@ flatten_psz(
  *   s      : source index along plume
  */
 static HOST_DEVICE inline int
-flatten_ps(
+flatten_pi(
     int phidec,
     int s,
     int sdim
@@ -3385,31 +3385,31 @@ __global__ void funcD01_direct(
     float local_sum = 0.0f;
     int n = sdim * phidecdim;
 
-    for (int k = t; k < n; k += blockDim.x) {
-        int s = k / phidecdim;
-        int phidec = k % phidecdim;
+    for (int m = t; m < n; m += blockDim.x) {
+        int i = m / phidecdim;
+        int phidec = m % phidecdim;
 
-        if (locZ[j] >= sourceZD[s]) continue;
+        if (locZ[j] >= sourceZD[i]) continue;
 
-        int z = (int)(locZ[j] / zdelta);
+        int k = (int)(locZ[j] / zdelta);
 
-        int idx_psz = flatten_psz(phidec, s, z, sdim, zdim);	// idx (phidec, s, z)
-        int idx_ps  = flatten_ps(phidec, s, sdim);				// idx (phidec, s)
+        int idx_pik = flatten_pik(phidec, i, k, sdim, zdim);	// idx (phidec, s, z)
+        int idx_pi  = flatten_pi(phidec, i, sdim);				// idx (phidec, s)
 
         float depcentX =
-            centX[idx_psz + 1]
-            + (centX[idx_psz] - centX[idx_psz + 1])
-            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+            centX[idx_pik + 1]
+            + (centX[idx_pik] - centX[idx_pik + 1])
+            * (zdelta * (k + 1) - locZ[j]) / zdelta;
 
         float depcentY =
-            centY[idx_psz + 1]
-            + (centY[idx_psz] - centY[idx_psz + 1])
-            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+            centY[idx_pik + 1]
+            + (centY[idx_pik] - centY[idx_pik + 1])
+            * (zdelta * (k + 1) - locZ[j]) / zdelta;
 
         float sigma2 =
-            cloud_sigma2[idx_psz + 1]
-            + (cloud_sigma2[idx_psz] - cloud_sigma2[idx_psz + 1])
-            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+            cloud_sigma2[idx_pik + 1]
+            + (cloud_sigma2[idx_pik] - cloud_sigma2[idx_pik + 1])
+            * (zdelta * (k + 1) - locZ[j]) / zdelta;
 
         float square_distance =
             (depcentX - locX[j]) * (depcentX - locX[j])
@@ -3419,12 +3419,12 @@ __global__ void funcD01_direct(
         local_sum +=
             1.0f / (M_2PI * sigma2)
             * exp(-square_distance / (2.0f * sigma2))
-            * massreleased[idx_ps];
+            * massreleased[idx_pi];
 #else
         local_sum +=
             1.0f / (M_PI * sigma2)
             * exp(-square_distance / sigma2)
-            * massreleased[idx_ps];
+            * massreleased[idx_pi];
 #endif
     }
 
@@ -3489,7 +3489,8 @@ __global__ void funcD01a(
     float *locZ,
     float *massreleased
 ){
-    int j, s, z, phidec, idx_ps, idx_psz;
+    int i, j, k, phidec; // i, j, k are index for source, location and level
+	int idx_pi, idx_pik; // idx_pi and idx_pik are flattened index
     float depcentX, depcentY, sigma2, square_distance;
 
     unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -3508,7 +3509,7 @@ __global__ void funcD01a(
          * phidec : grain-size subdivision index
          */
         j      = tid / (phidecdim * sdim);
-        s      = (tid / phidecdim) % sdim;
+        i      = (tid / phidecdim) % sdim;
         phidec = tid % phidecdim;
 
 		/*
@@ -3518,33 +3519,33 @@ __global__ void funcD01a(
          * Arrays centX, centY, and cloud_sigma2 are interpolated
          * between z and z+1.
          */
-        z = locZ[j] / zdelta;
+        k = locZ[j] / zdelta;
 
         /*
-         * idx_psz indexes arrays flattened from:
+         * idx_pik indexes arrays flattened from:
          *   [phidec][source][z]
          *
-         * idx_ps indexes arrays flattened from:
+         * idx_pi indexes arrays flattened from:
          *   [phidec][source]
          */
 		 
-		idx_psz = flatten_psz(phidec, s, z, sdim, zdim);
-		idx_ps = flatten_ps(phidec, s, sdim);
+		idx_pik = flatten_pik(phidec, i, k, sdim, zdim);
+		idx_pi = flatten_pi(phidec, i, sdim);
 
         depcentX =
-            centX[idx_psz + 1]
-            + (centX[idx_psz] - centX[idx_psz + 1])
-            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+            centX[idx_pik + 1]
+            + (centX[idx_pik] - centX[idx_pik + 1])
+            * (zdelta * (k + 1) - locZ[j]) / zdelta;
 
         depcentY =
-            centY[idx_psz + 1]
-            + (centY[idx_psz] - centY[idx_psz + 1])
-            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+            centY[idx_pik + 1]
+            + (centY[idx_pik] - centY[idx_pik + 1])
+            * (zdelta * (k + 1) - locZ[j]) / zdelta;
 
         sigma2 =
-            cloud_sigma2[idx_psz + 1]
-            + (cloud_sigma2[idx_psz] - cloud_sigma2[idx_psz + 1])
-            * (zdelta * (z + 1) - locZ[j]) / zdelta;
+            cloud_sigma2[idx_pik + 1]
+            + (cloud_sigma2[idx_pik] - cloud_sigma2[idx_pik + 1])
+            * (zdelta * (k + 1) - locZ[j]) / zdelta;
 
         square_distance =
             (depcentX - locX[j]) * (depcentX - locX[j]) 
@@ -3557,19 +3558,19 @@ __global__ void funcD01a(
          * Only sources above the current location (locZ[j]) contribute
          * to mass loading at that location.
          */
-        if(locZ[j] < sourceZD[s]){
+        if(locZ[j] < sourceZD[i]){
             /* Original formulation: Bonadonna et al. (2005) */
             massloading_loc_source_phiD[tid] =
                 1 / (M_2PI * sigma2)
                 * exp(-square_distance / (2 * sigma2))
-                * massreleased[idx_ps];
+                * massreleased[idx_pi];
 
 #ifdef TEPHRA2
             /* Formulation used in Tephra2 and WT */
             massloading_loc_source_phiD[tid] =
                 1 / (M_PI * sigma2)
                 * exp(-square_distance / sigma2)
-                * massreleased[idx_ps];
+                * massreleased[idx_pi];
 #endif
         }
 
@@ -4191,9 +4192,9 @@ void accumulate_massloading_for_phi(int phiint, double *tmp, double *ttl, double
 // D01a
 // Calculate mass loading of a certain grain size on a certain point on the ground (Sloc) from a certain source: Sloc(phi, s)
 void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2, double *locX, double *locY, double *locZ, double *massloading_loc_source_phi, double *massreleased){
-	int j, s, phidec, z;
-	int idx_ps;    // counter for arrays having grainsize(phidec) - plumelength(s; non cut off) order such as massreleased
-	int idx_psz;	// counter for arrays having grainsize(phidec) - plumelength(s; non cut off) - height(z) order such as cloud_center_x 
+	int i, j, phidec, k;	// i, j, k are index for source, location and level.
+	int idx_pi;    // counter for arrays having grainsize(phidec) - plumelength(i; non cut off) order such as massreleased
+	int idx_pik;	// counter for arrays having grainsize(phidec) - plumelength(i; non cut off) - height(k) order such as cloud_center_x 
 	double depcentX, depcentY, sigma2, square_distance;
 	//char string[30];
 	//FILE *outfile;
@@ -4202,28 +4203,28 @@ void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_cente
 	//outfile = fopen(string, "w");
 	//fprintf(outfile, "idx\ti\tj\tphisize\tdepcentX\tdepcentY\tsourceZ\tdep-locX\tdep-locY\tsigma2\tsquare_distance\tmassloading\tsourcemagnitude\n");
 	
-	for(int idx_psj = 0; idx_psj < PHIDECDIM * SDIMCUTOFF * LOCDIM; idx_psj++){ // idx_psj is index for location(j) - plumelength(s cutoff) - grainsize(phidec) order
-		j = idx_psj / (PHIDECDIM * SDIMCUTOFF);
-		s = (idx_psj / PHIDECDIM) % SDIMCUTOFF;
-		phidec = idx_psj % PHIDECDIM;
+	for(int idx_pij = 0; idx_pij < PHIDECDIM * SDIMCUTOFF * LOCDIM; idx_pij++){ // idx_pij is index for location(j) - plumelength(s cutoff) - grainsize(phidec) order
+		j = idx_pij / (PHIDECDIM * SDIMCUTOFF);
+		i = (idx_pij / PHIDECDIM) % SDIMCUTOFF;
+		phidec = idx_pij % PHIDECDIM;
 
-		z = (int)(locZ[j] / Z_DELTA);
-		idx_psz = flatten_psz(phidec, s, z, SDIM_FOR_FALL_CALC, ZDIM);
-		//idx_ps = s + phidec * SDIM_FOR_FALL_CALC;
+		k = (int)(locZ[j] / Z_DELTA);
+		idx_pik = flatten_pik(phidec, i, k, SDIM_FOR_FALL_CALC, ZDIM);
+		//idx_pi = i + phidec * SDIM_FOR_FALL_CALC;
 
-		idx_ps = flatten_ps(phidec, s, SDIM_FOR_FALL_CALC);
+		idx_pi = flatten_pi(phidec, i, SDIM_FOR_FALL_CALC);
 
-		if(locZ[j] < sourceZ[s]){
-			depcentX = cloud_center_x[idx_psz+1] + (cloud_center_x[idx_psz] - cloud_center_x[idx_psz+1]) * (Z_DELTA * (z + 1) - locZ[j]) / Z_DELTA;
-			depcentY = cloud_center_y[idx_psz+1] + (cloud_center_y[idx_psz] - cloud_center_y[idx_psz+1]) * (Z_DELTA * (z + 1) - locZ[j]) / Z_DELTA;
-			sigma2 = cloud_sigma2[idx_psz+1] + (cloud_sigma2[idx_psz] - cloud_sigma2[idx_psz+1]) * (Z_DELTA * (z + 1) - locZ[j]) / Z_DELTA;
+		if(locZ[j] < sourceZ[i]){
+			depcentX = cloud_center_x[idx_pik+1] + (cloud_center_x[idx_pik] - cloud_center_x[idx_pik+1]) * (Z_DELTA * (k + 1) - locZ[j]) / Z_DELTA;
+			depcentY = cloud_center_y[idx_pik+1] + (cloud_center_y[idx_pik] - cloud_center_y[idx_pik+1]) * (Z_DELTA * (k + 1) - locZ[j]) / Z_DELTA;
+			sigma2 = cloud_sigma2[idx_pik+1] + (cloud_sigma2[idx_pik] - cloud_sigma2[idx_pik+1]) * (Z_DELTA * (k + 1) - locZ[j]) / Z_DELTA;
 			square_distance = pow((depcentX - locX[j]), 2) + pow((depcentY - locY[j]), 2);
 			
-			massloading_loc_source_phi[idx_psj] = 1 / (M_2PI * sigma2) * exp(-square_distance / (2 * sigma2)) * massreleased[idx_ps];
+			massloading_loc_source_phi[idx_pij] = 1 / (M_2PI * sigma2) * exp(-square_distance / (2 * sigma2)) * massreleased[idx_pi];
 #ifdef TEPHRA2
-			massloading_loc_source_phi[idx_psj] = 1 / (M_PI * sigma2) * exp(-square_distance / (sigma2)) * massreleased[idx_ps];	// Formulation used in Tephra2 and WT
+			massloading_loc_source_phi[idx_pij] = 1 / (M_PI * sigma2) * exp(-square_distance / (sigma2)) * massreleased[idx_pi];	// Formulation used in Tephra2 and WT
 #endif
-			//if(j == 0 && phidec == 0){fprintf(outfile, "%d\t%d\t%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.6e\t%1.6e\t%1.6e\n", idx, s, j, phisize - phidec * 0.1, depcentX, depcentY, sourceZ[s], depcentX - locX[j], depcentY - locY[j], sigma2, square_distance, massloading_loc_source_phi[idx], massreleased[idx_ps]);}
+			//if(j == 0 && phidec == 0){fprintf(outfile, "%d\t%d\t%d\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.4f\t%1.6e\t%1.6e\t%1.6e\n", idx, s, j, phisize - phidec * 0.1, depcentX, depcentY, sourceZ[s], depcentX - locX[j], depcentY - locY[j], sigma2, square_distance, massloading_loc_source_phi[idx], massreleased[idx_pi]);}
 		}
 	}
 } // End of the function
@@ -4235,15 +4236,15 @@ void calc_mass_loading_element(int phisize, double *sourceZ, double *cloud_cente
 // Calculate mass loading on a certain grain size on a certain point on the ground.
 // All grainsizes and sources are summed up from the "elements", which is calculated by D01a.
 void calc_mass_loading_location(int phiint, double *massloading_loc_source_phi, double *massloading, double *ttl, double *cummassphi){
-	int idx_psj;
+	int idx_pij;
 	double phi;
 
 	for(int j = 0; j < LOCDIM; j++){
-		for(idx_psj = PHIDECDIM * SDIMCUTOFF * j; idx_psj < PHIDECDIM * SDIMCUTOFF * (j + 1); idx_psj++){
+		for(idx_pij = PHIDECDIM * SDIMCUTOFF * j; idx_pij < PHIDECDIM * SDIMCUTOFF * (j + 1); idx_pij++){
 			phi = phiint + MAX_GRAINSIZE + 1; // - phidec * INTERVAL_DECIMAL_PHI;
-			massloading[j] += massloading_loc_source_phi[idx_psj];
-			ttl[j] += massloading_loc_source_phi[idx_psj];
-			cummassphi[j] += massloading_loc_source_phi[idx_psj] * phi;
+			massloading[j] += massloading_loc_source_phi[idx_pij];
+			ttl[j] += massloading_loc_source_phi[idx_pij];
+			cummassphi[j] += massloading_loc_source_phi[idx_pij] * phi;
 		}
 	}
 	//printf("LINE302 j = %d\n", j);
@@ -4907,8 +4908,8 @@ void write_plume_files(
 // [8] Utilities
 // ==============================
 // [8.1] clear_array
-// [8.2] flatten_psz
-// [8.3] flatten_ps
+// [8.2] flatten_pik
+// [8.3] flatten_pi
 // [8.4] get_line_number
 // [8.5] get_wind_line_number
 

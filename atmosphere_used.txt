@@ -1,4 +1,4 @@
-z	h(m)	wind_dir	wind_v(m/s)	windX(m/s)	windY(m/s)	temp(K)	pres(Pa)
+k	h(m)	wind_dir	wind_v(m/s)	windX(m/s)	windY(m/s)	temp(K)	pres(Pa)
 0	0	143	0.0	0.0	-0.0	276.2	102862.0
 1	100	143	1.8	1.1	-1.4	275.5	101586.3
 2	200	143	3.5	2.1	-2.8	274.9	100323.5

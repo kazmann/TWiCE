@@ -31,6 +31,8 @@
 #endif
 
 /* CUDA Check*/
+#ifdef CUDA
+
 #include <cuda_runtime.h>
 
 #define CUDA_CHECK(call) do {                                      \
@@ -45,9 +47,10 @@
 
 #define CUDA_KERNEL_CHECK() do {                                   \
     CUDA_CHECK(cudaGetLastError());                                \
-    /*CUDA_CHECK(cudaDeviceSynchronize());*/                           \
 } while (0)
-// end of CUDA Check
+
+#endif
+/* End of CUDA Check*/
 
 //#define TEPHRA2 //Interpolation Used in TEPHRA2
 //#define CUDA
@@ -2261,30 +2264,30 @@ void interpolate_atmosphere_and_wind(int windlinenum, double *h, double *atmT, d
 	FILE *outfile;
 	if(WRITE_COLUMN_FILES){
 		outfile = fopen("atmosphere_used.txt", "w");
-		fprintf(outfile, "z\th(m)\twind_dir\twind_v(m/s)\twindX(m/s)\twindY(m/s)\ttemp(K)\tpres(Pa)\n");		
+		fprintf(outfile, "k\th(m)\twind_dir\twind_v(m/s)\twindX(m/s)\twindY(m/s)\ttemp(K)\tpres(Pa)\n");		
 	}
 
-	for(int z = 0; z < ZDIM; z++){
-		if (z == 0){
-		atmT[z] = wind_tmp[0];
-		atmP[z] = wind_pres[0] * 100; // hPa -> Pa
+	for(int k = 0; k < ZDIM; k++){
+		if (k == 0){
+		atmT[k] = wind_tmp[0];
+		atmP[k] = wind_pres[0] * 100; // hPa -> Pa
 		v = wind_v[0];
 		dir = wind_dir[0];
-		vary[z] = v;
-		dirary[z] = dir;
-		windY[z] = v * cos(dir / 360 * 2 * M_PI);
-		windX[z] = v * sin(dir / 360 * 2 * M_PI);
+		vary[k] = v;
+		dirary[k] = dir;
+		windY[k] = v * cos(dir / 360 * 2 * M_PI);
+		windX[k] = v * sin(dir / 360 * 2 * M_PI);
 		}else{
-		atmT[z] = calc_Tatm(h[z], windlinenum);
-		atmP[z] = calc_Patm(h[z], windlinenum);
-		v = interpolate_wind_speed(h[z], windlinenum);
-		dir = interpolate_wind_direction_across_360(h[z], windlinenum);
-		vary[z] = v;
-		dirary[z] = dir;
-		windY[z] = v * cos(dir / 360 * 2 * M_PI);
-		windX[z] = v * sin(dir / 360 * 2 * M_PI);
+		atmT[k] = calc_Tatm(h[k], windlinenum);
+		atmP[k] = calc_Patm(h[k], windlinenum);
+		v = interpolate_wind_speed(h[k], windlinenum);
+		dir = interpolate_wind_direction_across_360(h[k], windlinenum);
+		vary[k] = v;
+		dirary[k] = dir;
+		windY[k] = v * cos(dir / 360 * 2 * M_PI);
+		windX[k] = v * sin(dir / 360 * 2 * M_PI);
 		}
-		if(WRITE_COLUMN_FILES){fprintf(outfile, "%d\t%1.0f\t%1.0f\t%1.1f\t%1.1f\t%1.1f\t%1.1f\t%1.1f\n", z, h[z], dirary[z], vary[z], windX[z], windY[z], atmT[z], atmP[z]);}
+		if(WRITE_COLUMN_FILES){fprintf(outfile, "%d\t%1.0f\t%1.0f\t%1.1f\t%1.1f\t%1.1f\t%1.1f\t%1.1f\n", k, h[k], dirary[k], vary[k], windX[k], windY[k], atmT[k], atmP[k]);}
 	}
 	free(vary); free(dirary);
 	if(WRITE_COLUMN_FILES){fclose(outfile);}

@@ -1,0 +1,9 @@
+# Ignore everything
+*
+
+# Keep these files in the repository
+!.gitignore
+!main.c
+!conf.conf
+!topo.txt
+!wind.txt

@@ -113,7 +113,8 @@ int SDIMCUTOFF;							// Released mass below this threshold is treated as zero a
 double S_DELTA_FOR_PLUME_CALC = 10;		// Step size for Runge-Kutta calculation for plume trajectory
 double S_DELTA_FOR_FALL_CALC = 100;		// Length of a plume segment treated as a single source along the plume axis
 double Z_DELTA = 100;					// Vertical step size for fall calculation
-int ZDIM;   							// number of step (Z interval) for fall calculation
+int ZDIM;   							// number of step (Z interval) for cloud calculation
+int ZDIM_GPU;							// number of step (Z interval) for massloading calculation calculation
 
 // Locations of the ground
 int LOCDIM; 							// number of locations to calc
@@ -616,6 +617,18 @@ int main(int argc, char *argv[]) {
 		&locY,
 		&locZ
 	);
+
+	double max_locZ = 0.0;
+
+	for (int j = 0; j < LOCDIM; j++) {
+		if (locZ[j] > max_locZ) {
+			max_locZ = locZ[j];
+		}
+	}
+
+	ZDIM_GPU = (int)floor(max_locZ / Z_DELTA) + 2;
+
+	printf("ZDIM_GPU = %d (max_locZ = %.1f m)\n", ZDIM_GPU, max_locZ);
 
 	/* 2. PLUME and SOURCE SETUP */
 	/* 2.1. Set plume intervals for plume calculation and source distribution */
@@ -3227,7 +3240,7 @@ void calc_mass_loading(double *sourceZ, double *cloud_center_x, double *cloud_ce
 	//int idx_pik;
 	//int idx_pi;
 
-	PSZ = PHIDECDIM * SDIMCUTOFF * ZDIM;	//PSZ = PHIDECDIM * SDIM_FOR_FALL_CALC* ZDIM;
+	PSZ = PHIDECDIM * SDIMCUTOFF * ZDIM_GPU;
 	LSP = (size_t)chunk_locdim * SDIMCUTOFF * PHIDECDIM;	//LSP = LOCDIM * SDIM_FOR_FALL_CALC* PHIDECDIM;
 
 	/* end of 1.*/
@@ -3776,7 +3789,7 @@ static void pack_fixed_data_buffers(
 
     for (int phidec = 0; phidec < PHIDECDIM; phidec++) {
         for (int s = 0; s < SDIMCUTOFF; s++) {
-            for (int z = 0; z < ZDIM; z++) {
+            for (int z = 0; z < ZDIM_GPU; z++) {
 
 				size_t src =
 					(size_t)phidec * SDIM_FOR_FALL_CALC * ZDIM
@@ -3784,8 +3797,8 @@ static void pack_fixed_data_buffers(
 					+ z;
 
 				size_t dst =
-					(size_t)phidec * SDIMCUTOFF * ZDIM
-					+ (size_t)s * ZDIM
+					(size_t)phidec * SDIMCUTOFF * ZDIM_GPU
+					+ (size_t)s * ZDIM_GPU
 					+ z;
 
                 b->host.centXF[dst] = (float)cloud_center_x[src];
@@ -4052,7 +4065,7 @@ static void launch_mass_loading_kernels_buffers(
 		size_t shmem = blocksize * sizeof(float);
 
 		funcD01_direct<<<grid_reduce, block, shmem>>>(
-			locN, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
+			locN, ZDIM_GPU, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
 			b->device.ttlmlD,
 			b->device.sourceZD,
 			b->device.centXD,
@@ -4068,7 +4081,7 @@ static void launch_mass_loading_kernels_buffers(
 
 	} else {
 		funcD01a<<<grid, block>>>(
-			N, ZDIM, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
+			N, ZDIM_GPU, SDIMCUTOFF, PHIDECDIM, (float)Z_DELTA,
 			b->device.massloading_loc_source_phiD,
 			b->device.ttlmlD,
 			b->device.sourceZD,

@@ -3032,45 +3032,112 @@ void calc_falltime_and_drift_profile(int zmax, int phidecimal, double grainsize,
  * released from each point along the plume axis.
  *
  * For each source point s and height interval z, this function calculates:
- * - cloud_center_x[phidec][s][z]     : X-coordinate of cloud center
- *                                (wind drift + transport along the plume)
- * - cloud_center_y[phidec][s][z]     : Y-coordinate of cloud center
- *                                (wind drift + transport along the plume)
- * - cloud_sigma2[phidec][s][z] : variance of horizontal dispersion of the cloud
+ * - cloud_center_x[phidec][s][z] : X-coordinate of cloud center
+ *                                  (wind drift + transport along the plume)
+ * - cloud_center_y[phidec][s][z] : Y-coordinate of cloud center
+ *                                  (wind drift + transport along the plume)
+ * - cloud_sigma2[phidec][s][z]   : variance of horizontal dispersion of the cloud
  *
  * A "cloud" is a group of particles that:
  * - share the same grain size (same phidec)
  * - are released from the same source point s
+ *
+ * In CUDA mode, cloud properties are calculated only up to ZDIM_GPU,
+ * because higher levels are not used in the GPU mass-loading calculation.
+ * The host arrays retain their original ZDIM-based layout.
  */
-void calc_cloud_property(double *source_x, double *source_y, double *source_height, double *sourceRadius, double *TotalFallTime, double *driftX, double *driftY, double *cloud_center_x, double *cloud_center_y, double *cloud_sigma2){
-	int i, k, phidec;							// i and k are index for source and level
-	int k_source;								// k_source means index of height just above the source height
-	int idx_fallingcloud, idx_source;			// idx means flattened index
+void calc_cloud_property(
+	double *source_x,
+	double *source_y,
+	double *source_height,
+	double *sourceRadius,
+	double *TotalFallTime,
+	double *driftX,
+	double *driftY,
+	double *cloud_center_x,
+	double *cloud_center_y,
+	double *cloud_sigma2
+){
+	int i, k, phidec;
+	int k_source;					// index of height just above the source height
+	int idx_pik;					// flattened index for (phidec, source, level)
+	int idx_fallingcloud, idx_source;
 	double residue_up, fall_time_residue_up;
 	double falltime, ttldriftX, ttldriftY;
 
-	for(int idx_pik = 0; idx_pik < ZDIM * SDIM_FOR_FALL_CALC * PHIDECDIM; idx_pik++){		// idx_pik (phidec, source, level) is index for driftXY_s and cloud_sigma2
-		k = idx_pik % ZDIM;
-		i = (idx_pik / ZDIM) % SDIM_FOR_FALL_CALC;
-		phidec = idx_pik / (ZDIM * SDIM_FOR_FALL_CALC);
-		k_source = ceil(source_height[i] / Z_DELTA); // source_height means source height
-		if(k < k_source){
-			idx_fallingcloud = (phidec * ZDIM) + k;
-			idx_source = (phidec * ZDIM) + k_source; // idx_fallingcloud is index for driftXY and TotalFallTime
-			
-			residue_up = source_height[i] - (k_source - 1) * Z_DELTA;
-			fall_time_residue_up =  (TotalFallTime[idx_source - 1] - TotalFallTime[idx_source]) * residue_up / Z_DELTA;
+	/*
+	 * CPU mode requires the full vertical range.
+	 * CUDA mode requires cloud properties only up to ZDIM_GPU.
+	 *
+	 * Note that idx_pik still uses ZDIM as its stride because the
+	 * host-side cloud arrays retain their original ZDIM-based layout.
+	 */
+#ifdef CUDA
+	int zdim_calc = ZDIM_GPU;
+#else
+	int zdim_calc = ZDIM;
+#endif
 
-			falltime = TotalFallTime[idx_fallingcloud] - TotalFallTime[idx_source - 1] + fall_time_residue_up;
+	for(phidec = 0; phidec < PHIDECDIM; phidec++){
+		for(i = 0; i < SDIM_FOR_FALL_CALC; i++){
+			for(k = 0; k < zdim_calc; k++){
 
-			ttldriftX = (driftX[idx_fallingcloud] - driftX[idx_source - 1]) + (driftX[idx_source - 1] - driftX[idx_source]) * residue_up / Z_DELTA;
-			ttldriftY = (driftY[idx_fallingcloud] - driftY[idx_source - 1]) + (driftY[idx_source - 1] - driftY[idx_source]) * residue_up / Z_DELTA;
+				idx_pik =
+					phidec * SDIM_FOR_FALL_CALC * ZDIM
+					+ i * ZDIM
+					+ k;
 
-			//printf("phidec=%d\ts=%d\tz=%d\tdrftX=%1.4f\tttldrftX = %1.4f\n", phidec, s, z, driftX[idx_fallingcloud], ttldriftX);
+				k_source = ceil(source_height[i] / Z_DELTA);
 
-			cloud_center_x[idx_pik] = source_x[i] + ttldriftX;
-			cloud_center_y[idx_pik] = source_y[i] + ttldriftY;
-			cloud_sigma2[idx_pik] = calc_cloud_sigma2(sourceRadius[i] * PLUME_RADIUS_CORRECTION, falltime); // F21
+				if(k < k_source){
+
+					idx_fallingcloud =
+						(phidec * ZDIM) + k;
+
+					idx_source =
+						(phidec * ZDIM) + k_source;
+
+					residue_up =
+						source_height[i]
+						- (k_source - 1) * Z_DELTA;
+
+					fall_time_residue_up =
+						(TotalFallTime[idx_source - 1]
+						- TotalFallTime[idx_source])
+						* residue_up / Z_DELTA;
+
+					falltime =
+						TotalFallTime[idx_fallingcloud]
+						- TotalFallTime[idx_source - 1]
+						+ fall_time_residue_up;
+
+					ttldriftX =
+						(driftX[idx_fallingcloud]
+						- driftX[idx_source - 1])
+						+ (driftX[idx_source - 1]
+						- driftX[idx_source])
+						* residue_up / Z_DELTA;
+
+					ttldriftY =
+						(driftY[idx_fallingcloud]
+						- driftY[idx_source - 1])
+						+ (driftY[idx_source - 1]
+						- driftY[idx_source])
+						* residue_up / Z_DELTA;
+
+					cloud_center_x[idx_pik] =
+						source_x[i] + ttldriftX;
+
+					cloud_center_y[idx_pik] =
+						source_y[i] + ttldriftY;
+
+					cloud_sigma2[idx_pik] =
+						calc_cloud_sigma2(
+							sourceRadius[i] * PLUME_RADIUS_CORRECTION,
+							falltime
+						); // F21
+				}
+			}
 		}
 	}
 } // End of the function (F20) [5.3.2.]
